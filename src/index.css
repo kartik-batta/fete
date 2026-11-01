@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    background-color: #FAF7F2;
+    color: #2D3748;
+  }
+}
+
+.font-serif-title {
+  font-family: 'Playfair Display', Georgia, serif;
+}
+
+.font-handwriting {
+  font-family: 'Caveat', cursive;
+}
+
+/* Custom soft pastel scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #F4EFE6;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb {
+  background: #E2D9CC;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #D1C5B4;
+}
+
+/* Glass & Pastel Card effects */
+.pastel-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(243, 232, 222, 0.8);
+  box-shadow: 0 4px 20px -2px rgba(180, 160, 140, 0.08);
+}
+
+.festive-gradient {
+  background: linear-gradient(135deg, #FFF0EB 0%, #FBEBF7 50%, #F0F6F5 100%);
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Fête - Celebration & Event Planner",
+  "description": "Delightful celebration and event planner with AI-powered themes, custom invitations, day-of timelines, budget tracking, guest lists, and vendor management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
