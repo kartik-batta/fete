@@ -1,11 +1,10 @@
-import React from 'react';
-import { EventData } from '../../types';
+import React, { memo, useCallback, useMemo } from 'react';
+import { EventData, InvitationDraft, MenuIdeas } from '../../types';
 import {
   Sparkles,
   Users,
   DollarSign,
   CheckCircle2,
-  Calendar,
   Clock,
   ArrowRight,
   Music,
@@ -14,8 +13,19 @@ import {
   PartyPopper,
   Mail,
   ListTodo,
+  AlertTriangle,
 } from 'lucide-react';
-import { triggerMiniConfetti, triggerFestiveConfetti } from '../../utils/confetti';
+import { triggerMiniConfetti } from '../../utils/confetti';
+import {
+  clampPercent,
+  getBudgetStats,
+  getCommittedAmount,
+  getDietaryNotes,
+  getGuestStats,
+  getLargestExpenses,
+  getAttentionItems,
+  getUpcomingTasks,
+} from '../../utils/eventStats';
 
 interface OverviewTabProps {
   event: EventData;
@@ -23,119 +33,246 @@ interface OverviewTabProps {
   onSwitchTab: (tab: string) => void;
 }
 
-export const OverviewTab: React.FC<OverviewTabProps> = ({
-  event,
-  onUpdateEvent,
-  onSwitchTab,
-}) => {
-  // Toggle task from overview
-  const handleToggleTask = (taskId: string, e: React.MouseEvent) => {
-    const updatedTasks = event.tasks.map((t) => {
-      if (t.id === taskId) {
-        const nextState = !t.completed;
-        if (nextState) {
-          const rect = (e.target as HTMLElement).getBoundingClientRect();
-          triggerMiniConfetti(rect.x / window.innerWidth, rect.y / window.innerHeight);
-        }
-        return { ...t, completed: nextState };
+const UPCOMING_TASK_LIMIT = 4;
+const DEFAULT_MUSIC_VIBE = 'Acoustic melodies, warm indie folk, and golden hour jazz';
+const DEFAULT_ATTIRE = 'Festive chic with subtle pastel or earth tones';
+const LARGEST_EXPENSE_LIMIT = 3;
+
+const MENU_COURSES: { key: keyof MenuIdeas; label: string }[] = [
+  { key: 'starters', label: 'Starters' },
+  { key: 'mains', label: 'Mains' },
+  { key: 'desserts', label: 'Desserts' },
+  { key: 'signatureDrinks', label: 'Signature drinks' },
+];
+
+interface SavedPlansCardProps {
+  menuIdeas?: MenuIdeas;
+  invitationDraft?: InvitationDraft;
+  onOpenAiStudio: () => void;
+}
+
+/** Shows the menu and invitation saved from AI Studio, or nothing if neither exists. */
+const SavedPlansCard = memo(function SavedPlansCard({
+  menuIdeas,
+  invitationDraft,
+  onOpenAiStudio,
+}: SavedPlansCardProps) {
+  const courses = menuIdeas ? MENU_COURSES.filter(({ key }) => menuIdeas[key]?.length > 0) : [];
+  if (courses.length === 0 && !invitationDraft) return null;
+
+  return (
+    <section
+      aria-labelledby="saved-plans-heading"
+      className="bg-white rounded-3xl border border-[#EFE5D8] p-6 shadow-xs space-y-5"
+    >
+      <div className="flex items-center justify-between">
+        <h2 id="saved-plans-heading" className="font-serif-title text-xl font-bold text-stone-900">
+          Saved from AI Studio
+        </h2>
+        <button
+          type="button"
+          onClick={onOpenAiStudio}
+          className="text-xs font-semibold text-rose-600 hover:text-rose-700 hover:underline"
+        >
+          Refine →
+        </button>
+      </div>
+
+      {courses.length > 0 && menuIdeas && (
+        <div>
+          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-stone-500 mb-2">
+            <Utensils className="w-3.5 h-3.5" aria-hidden="true" /> Menu
+          </h3>
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            {courses.map(({ key, label }) => (
+              <div key={key} className="p-3 rounded-2xl bg-stone-50/80 border border-stone-100">
+                <dt className="font-semibold text-stone-800 mb-1">{label}</dt>
+                <dd className="text-stone-600">{menuIdeas[key].join(' · ')}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+
+      {invitationDraft && (
+        <div>
+          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-stone-500 mb-2">
+            <Mail className="w-3.5 h-3.5" aria-hidden="true" /> Invitation
+          </h3>
+          <figure className="p-4 rounded-2xl bg-[#FCFBF8] border border-stone-100 text-xs text-stone-700 space-y-1.5">
+            {invitationDraft.headline && (
+              <p className="font-serif-title text-base font-bold text-stone-900">{invitationDraft.headline}</p>
+            )}
+            {invitationDraft.greeting && <p>{invitationDraft.greeting}</p>}
+            {invitationDraft.body && <p className="line-clamp-3">{invitationDraft.body}</p>}
+            {(invitationDraft.detailsBlock?.when || invitationDraft.detailsBlock?.where) && (
+              <p className="text-stone-500">
+                {[invitationDraft.detailsBlock.when, invitationDraft.detailsBlock.where].filter(Boolean).join(' · ')}
+              </p>
+            )}
+          </figure>
+        </div>
+      )}
+    </section>
+  );
+});
+
+const PRIORITY_BADGE_CLASSES = {
+  high: 'bg-rose-100 text-rose-700',
+  medium: 'bg-amber-100 text-amber-700',
+  low: 'bg-emerald-100 text-emerald-700',
+} as const;
+
+export const OverviewTab = memo(function OverviewTab({ event, onUpdateEvent, onSwitchTab }: OverviewTabProps) {
+  const handleToggleTask = useCallback(
+    (taskId: string, e: React.MouseEvent<HTMLElement>) => {
+      const task = event.tasks.find((t) => t.id === taskId);
+      if (!task) return;
+      const completed = !task.completed;
+      if (completed) {
+        const rect = e.currentTarget.getBoundingClientRect();
+        triggerMiniConfetti(rect.x / window.innerWidth, rect.y / window.innerHeight);
       }
-      return t;
-    });
-    onUpdateEvent({ ...event, tasks: updatedTasks });
-  };
+      onUpdateEvent({
+        ...event,
+        tasks: event.tasks.map((t) => (t.id === taskId ? { ...t, completed } : t)),
+      });
+    },
+    [event, onUpdateEvent]
+  );
 
-  const attendingGuests = event.guests.filter((g) => g.rsvp === 'attending');
-  const dietaryItems = event.guests
-    .filter((g) => g.dietary && g.dietary.toLowerCase() !== 'none')
-    .map((g) => ({ name: g.name, dietary: g.dietary }));
-
-  const nextTasks = event.tasks.filter((t) => !t.completed).slice(0, 4);
-  const totalSpent = event.expenses.reduce((acc, exp) => acc + (exp.actual || exp.budgeted || 0), 0);
-  const remainingBudget = Math.max(0, event.totalBudget - totalSpent);
+  const openAiStudio = useCallback(() => onSwitchTab('ai-concierge'), [onSwitchTab]);
+  const guestStats = useMemo(() => getGuestStats(event.guests), [event.guests]);
+  const dietaryItems = useMemo(() => getDietaryNotes(event.guests), [event.guests]);
+  const nextTasks = useMemo(() => getUpcomingTasks(event.tasks, UPCOMING_TASK_LIMIT), [event.tasks]);
+  const budget = useMemo(
+    () => getBudgetStats(event.expenses, event.totalBudget),
+    [event.expenses, event.totalBudget]
+  );
+  const attentionItems = useMemo(() => getAttentionItems(event), [event]);
+  const largestExpenses = useMemo(
+    () => getLargestExpenses(event.expenses, LARGEST_EXPENSE_LIMIT),
+    [event.expenses]
+  );
 
   return (
     <div className="space-y-6">
+      {attentionItems.length > 0 && (
+        <section
+          aria-labelledby="needs-attention-heading"
+          className="bg-white rounded-3xl border border-amber-200 p-5 shadow-xs"
+        >
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle className="w-4 h-4 text-amber-600" aria-hidden="true" />
+            <h2 id="needs-attention-heading" className="font-serif-title text-lg font-bold text-stone-900">
+              Needs attention
+            </h2>
+          </div>
+          <ul className="flex flex-wrap gap-2">
+            {attentionItems.map((item) => (
+              <li key={item.kind}>
+                <button
+                  type="button"
+                  onClick={() => onSwitchTab(item.tab)}
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-xl border transition hover:shadow-xs ${
+                    item.severity === 'high'
+                      ? 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+                      : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  {item.message} →
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* Quick AI Action Cards Bar */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: AI Themes */}
-        <div
+        <button
+          type="button"
           onClick={() => onSwitchTab('ai-concierge')}
-          className="p-5 rounded-3xl bg-gradient-to-br from-rose-50 via-pink-50/50 to-white border border-rose-100/90 shadow-xs hover:shadow-md hover:scale-[1.01] transition cursor-pointer group"
+          className="text-left w-full p-5 rounded-3xl bg-gradient-to-br from-rose-50 via-pink-50/50 to-white border border-rose-100/90 shadow-xs hover:shadow-md hover:scale-[1.01] transition cursor-pointer group"
         >
-          <div className="w-9 h-9 rounded-2xl bg-rose-200/60 flex items-center justify-center text-rose-700 mb-3 group-hover:scale-110 transition">
-            <Sparkles className="w-4 h-4" />
-          </div>
-          <h3 className="font-serif-title font-bold text-stone-900 text-base mb-1">
+          <span className="w-9 h-9 rounded-2xl bg-rose-200/60 flex items-center justify-center text-rose-700 mb-3 group-hover:scale-110 transition">
+            <Sparkles className="w-4 h-4" aria-hidden="true" />
+          </span>
+          <span className="block font-serif-title font-bold text-stone-900 text-base mb-1">
             AI Theme Generator
-          </h3>
-          <p className="text-xs text-stone-600 line-clamp-2 mb-3">
+          </span>
+          <span className="block text-xs text-stone-600 line-clamp-2 mb-3">
             Get personalized palettes, decor ideas, and styling concepts tailored to your budget.
-          </p>
-          <div className="flex items-center text-xs font-semibold text-rose-600 group-hover:gap-2 gap-1 transition-all">
+          </span>
+          <span className="flex items-center text-xs font-semibold text-rose-600 group-hover:gap-2 gap-1 transition-all">
             <span>Explore Themes</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </div>
-        </div>
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+          </span>
+        </button>
 
         {/* Card 2: AI Invitations */}
-        <div
+        <button
+          type="button"
           onClick={() => onSwitchTab('ai-concierge')}
-          className="p-5 rounded-3xl bg-gradient-to-br from-amber-50 via-orange-50/40 to-white border border-amber-100/90 shadow-xs hover:shadow-md hover:scale-[1.01] transition cursor-pointer group"
+          className="text-left w-full p-5 rounded-3xl bg-gradient-to-br from-amber-50 via-orange-50/40 to-white border border-amber-100/90 shadow-xs hover:shadow-md hover:scale-[1.01] transition cursor-pointer group"
         >
-          <div className="w-9 h-9 rounded-2xl bg-amber-200/60 flex items-center justify-center text-amber-800 mb-3 group-hover:scale-110 transition">
-            <Mail className="w-4 h-4" />
-          </div>
-          <h3 className="font-serif-title font-bold text-stone-900 text-base mb-1">
+          <span className="w-9 h-9 rounded-2xl bg-amber-200/60 flex items-center justify-center text-amber-800 mb-3 group-hover:scale-110 transition">
+            <Mail className="w-4 h-4" aria-hidden="true" />
+          </span>
+          <span className="block font-serif-title font-bold text-stone-900 text-base mb-1">
             Custom Invitations
-          </h3>
-          <p className="text-xs text-stone-600 line-clamp-2 mb-3">
+          </span>
+          <span className="block text-xs text-stone-600 line-clamp-2 mb-3">
             Draft invitations & thank-you notes in warm, playful, or elegant editorial tones.
-          </p>
-          <div className="flex items-center text-xs font-semibold text-amber-700 group-hover:gap-2 gap-1 transition-all">
+          </span>
+          <span className="flex items-center text-xs font-semibold text-amber-700 group-hover:gap-2 gap-1 transition-all">
             <span>Draft Wording</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </div>
-        </div>
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+          </span>
+        </button>
 
         {/* Card 3: Day-of Timeline */}
-        <div
+        <button
+          type="button"
           onClick={() => onSwitchTab('timeline')}
-          className="p-5 rounded-3xl bg-gradient-to-br from-emerald-50 via-teal-50/40 to-white border border-emerald-100/90 shadow-xs hover:shadow-md hover:scale-[1.01] transition cursor-pointer group"
+          className="text-left w-full p-5 rounded-3xl bg-gradient-to-br from-emerald-50 via-teal-50/40 to-white border border-emerald-100/90 shadow-xs hover:shadow-md hover:scale-[1.01] transition cursor-pointer group"
         >
-          <div className="w-9 h-9 rounded-2xl bg-emerald-200/60 flex items-center justify-center text-emerald-800 mb-3 group-hover:scale-110 transition">
-            <Clock className="w-4 h-4" />
-          </div>
-          <h3 className="font-serif-title font-bold text-stone-900 text-base mb-1">
+          <span className="w-9 h-9 rounded-2xl bg-emerald-200/60 flex items-center justify-center text-emerald-800 mb-3 group-hover:scale-110 transition">
+            <Clock className="w-4 h-4" aria-hidden="true" />
+          </span>
+          <span className="block font-serif-title font-bold text-stone-900 text-base mb-1">
             Day-of Run of Show
-          </h3>
-          <p className="text-xs text-stone-600 line-clamp-2 mb-3">
+          </span>
+          <span className="block text-xs text-stone-600 line-clamp-2 mb-3">
             Stress-free timeline with designated coordinators, vendor checks, and speech cues.
-          </p>
-          <div className="flex items-center text-xs font-semibold text-emerald-700 group-hover:gap-2 gap-1 transition-all">
+          </span>
+          <span className="flex items-center text-xs font-semibold text-emerald-700 group-hover:gap-2 gap-1 transition-all">
             <span>View Schedule ({event.timeline.length})</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </div>
-        </div>
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+          </span>
+        </button>
 
         {/* Card 4: Menu & Activities */}
-        <div
+        <button
+          type="button"
           onClick={() => onSwitchTab('ai-concierge')}
-          className="p-5 rounded-3xl bg-gradient-to-br from-purple-50 via-indigo-50/40 to-white border border-purple-100/90 shadow-xs hover:shadow-md hover:scale-[1.01] transition cursor-pointer group"
+          className="text-left w-full p-5 rounded-3xl bg-gradient-to-br from-purple-50 via-indigo-50/40 to-white border border-purple-100/90 shadow-xs hover:shadow-md hover:scale-[1.01] transition cursor-pointer group"
         >
-          <div className="w-9 h-9 rounded-2xl bg-purple-200/60 flex items-center justify-center text-purple-800 mb-3 group-hover:scale-110 transition">
-            <Utensils className="w-4 h-4" />
-          </div>
-          <h3 className="font-serif-title font-bold text-stone-900 text-base mb-1">
+          <span className="w-9 h-9 rounded-2xl bg-purple-200/60 flex items-center justify-center text-purple-800 mb-3 group-hover:scale-110 transition">
+            <Utensils className="w-4 h-4" aria-hidden="true" />
+          </span>
+          <span className="block font-serif-title font-bold text-stone-900 text-base mb-1">
             Menu & Activities
-          </h3>
-          <p className="text-xs text-stone-600 line-clamp-2 mb-3">
+          </span>
+          <span className="block text-xs text-stone-600 line-clamp-2 mb-3">
             Generate artisanal course ideas, signature cocktails, and crowd-pleasing party games.
-          </p>
-          <div className="flex items-center text-xs font-semibold text-purple-700 group-hover:gap-2 gap-1 transition-all">
+          </span>
+          <span className="flex items-center text-xs font-semibold text-purple-700 group-hover:gap-2 gap-1 transition-all">
             <span>Discover Ideas</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </div>
-        </div>
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+          </span>
+        </button>
       </div>
 
       {/* Main Grid: Pinterest Moodboard Style */}
@@ -170,9 +307,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 Curated Color Swatches
               </span>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                {event.themePalette?.map((color, idx) => (
+                {event.themePalette?.map((color) => (
                   <div
-                    key={idx}
+                    key={`${color.hex}-${color.name}`}
                     className="p-2 rounded-2xl border border-stone-100 bg-[#FCFBF8] shadow-xs flex flex-col items-center text-center"
                   >
                     <div
@@ -196,14 +333,14 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 <Music className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
                 <div>
                   <span className="font-semibold text-stone-800 block">Ambiance:</span>
-                  <span>Acoustic melodies, warm indie folk, and golden hour jazz</span>
+                  <span>{event.themeDetails?.musicVibe || DEFAULT_MUSIC_VIBE}</span>
                 </div>
               </div>
               <div className="flex items-start gap-2 text-stone-600 bg-stone-50/80 p-2.5 rounded-xl border border-stone-200/60">
                 <Shirt className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
                 <div>
                   <span className="font-semibold text-stone-800 block">Guest Attire:</span>
-                  <span>Festive chic with subtle pastel or earth tones</span>
+                  <span>{event.themeDetails?.attire || DEFAULT_ATTIRE}</span>
                 </div>
               </div>
             </div>
@@ -241,7 +378,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   >
                     <div className="flex items-center gap-3">
                       <button
+                        type="button"
                         onClick={(e) => handleToggleTask(task.id, e)}
+                        aria-label={`Mark "${task.title}" as done`}
                         className="w-5 h-5 rounded-lg border-2 border-stone-300 group-hover:border-emerald-500 flex items-center justify-center transition"
                       >
                         {task.completed && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
@@ -260,11 +399,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
                     <span
                       className={`text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize ${
-                        task.priority === 'high'
-                          ? 'bg-rose-100 text-rose-700'
-                          : task.priority === 'medium'
-                          ? 'bg-amber-100 text-amber-700'
-                          : 'bg-emerald-100 text-emerald-700'
+                        PRIORITY_BADGE_CLASSES[task.priority] ?? PRIORITY_BADGE_CLASSES.low
                       }`}
                     >
                       {task.priority}
@@ -274,6 +409,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               </div>
             )}
           </div>
+
+          <SavedPlansCard
+            menuIdeas={event.menuIdeas}
+            invitationDraft={event.invitationDraft}
+            onOpenAiStudio={openAiStudio}
+          />
         </div>
 
         {/* Right Column (5 cols): RSVP Pulse & Budget Snapshot */}
@@ -299,7 +440,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             <div className="grid grid-cols-3 gap-2 text-center mb-5">
               <div className="p-3 rounded-2xl bg-emerald-50/70 border border-emerald-100">
                 <span className="text-2xl font-bold text-emerald-700 block">
-                  {attendingGuests.length}
+                  {guestStats.attending}
                 </span>
                 <span className="text-[10px] uppercase tracking-wider font-semibold text-emerald-800">
                   Attending
@@ -307,7 +448,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               </div>
               <div className="p-3 rounded-2xl bg-amber-50/70 border border-amber-100">
                 <span className="text-2xl font-bold text-amber-700 block">
-                  {event.guests.filter((g) => g.rsvp === 'pending').length}
+                  {guestStats.pending}
                 </span>
                 <span className="text-[10px] uppercase tracking-wider font-semibold text-amber-800">
                   Pending
@@ -315,7 +456,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               </div>
               <div className="p-3 rounded-2xl bg-stone-100/70 border border-stone-200">
                 <span className="text-2xl font-bold text-stone-700 block">
-                  {event.guests.filter((g) => g.rsvp === 'declined').length}
+                  {guestStats.declined}
                 </span>
                 <span className="text-[10px] uppercase tracking-wider font-semibold text-stone-800">
                   Declined
@@ -332,7 +473,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 <div className="flex flex-wrap gap-1.5">
                   {dietaryItems.map((item, idx) => (
                     <span
-                      key={idx}
+                      key={`${item.name}-${idx}`}
                       className="text-[11px] px-2.5 py-1 rounded-xl bg-rose-50 text-rose-800 border border-rose-100"
                     >
                       <strong className="font-semibold">{item.dietary}:</strong> {item.name}
@@ -362,13 +503,21 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
             <div className="flex items-baseline justify-between mb-2">
               <div>
-                <span className="text-xs text-stone-500 block">Spent / Committed</span>
-                <span className="text-2xl font-bold text-stone-900">${totalSpent.toLocaleString()}</span>
+                <span className="text-xs text-stone-500 block">Committed</span>
+                <span className="text-2xl font-bold text-stone-900">${budget.totalCommitted.toLocaleString()}</span>
               </div>
               <div className="text-right">
-                <span className="text-xs text-stone-500 block">Remaining</span>
-                <span className="text-xl font-semibold text-emerald-700">
-                  ${remainingBudget.toLocaleString()}
+                <span className="text-xs text-stone-500 block">
+                  {budget.position === 'over' ? 'Over budget' : budget.position === 'on' ? 'On budget' : 'Remaining'}
+                </span>
+                <span
+                  className={`text-xl font-semibold ${
+                    budget.position === 'over' ? 'text-rose-700' : 'text-emerald-700'
+                  }`}
+                >
+                  {budget.position === 'over'
+                    ? `+$${budget.overBy.toLocaleString()}`
+                    : `$${budget.remaining.toLocaleString()}`}
                 </span>
               </div>
             </div>
@@ -376,12 +525,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             <div className="w-full bg-stone-100 h-2 rounded-full overflow-hidden mb-4">
               <div
                 className="h-full bg-amber-500 rounded-full transition-all"
-                style={{
-                  width: `${Math.min(
-                    100,
-                    event.totalBudget > 0 ? (totalSpent / event.totalBudget) * 100 : 0
-                  )}%`,
-                }}
+                style={{ width: `${clampPercent(budget.percentCommitted)}%` }}
               />
             </div>
 
@@ -390,14 +534,14 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               <span className="text-[11px] font-semibold uppercase tracking-wider text-stone-400 block mb-1">
                 Largest Bookings
               </span>
-              {event.expenses.slice(0, 3).map((exp) => (
+              {largestExpenses.map((exp) => (
                 <div
                   key={exp.id}
                   className="flex items-center justify-between text-xs py-1.5 border-b border-stone-50 last:border-0"
                 >
                   <span className="text-stone-700 truncate pr-2">{exp.name}</span>
                   <span className="font-semibold text-stone-900 font-mono">
-                    ${(exp.actual || exp.budgeted).toLocaleString()}
+                    ${getCommittedAmount(exp).toLocaleString()}
                   </span>
                 </div>
               ))}
@@ -407,4 +551,4 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       </div>
     </div>
   );
-};
+});
