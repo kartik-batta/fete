@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
+import { Plus, Sparkles, Trash2 } from 'lucide-react';
 import { AITheme, PaletteColor } from '../../types';
-import { X, Check, Plus, Trash2, Sparkles } from 'lucide-react';
 import { triggerFestiveConfetti } from '../../utils/confetti';
+import { Modal, ModalActions } from '../ui/Modal';
+import { RequiredFieldsNote, TextAreaField, TextField, controlClass } from '../ui/FormField';
+import { IconButton } from '../ui/IconButton';
+import { FieldErrors, LIMITS, isValidHex, sanitizeText } from '../ui/form';
+import { useFormErrors } from '../ui/useFormErrors';
 
 interface TweakThemeModalProps {
   isOpen: boolean;
@@ -10,234 +15,213 @@ interface TweakThemeModalProps {
   onSaveToEvent: (customizedTheme: AITheme) => void;
 }
 
-export const TweakThemeModal: React.FC<TweakThemeModalProps> = ({
-  isOpen,
-  onClose,
-  theme,
-  onSaveToEvent,
-}) => {
-  if (!isOpen) return null;
+const MAX_DECOR_IDEAS = 20;
 
-  const [title, setTitle] = useState(theme.title || '');
-  const [tagline, setTagline] = useState(theme.tagline || '');
-  const [palette, setPalette] = useState<PaletteColor[]>(theme.palette || []);
-  const [decorIdeas, setDecorIdeas] = useState<string[]>(theme.decorIdeas || []);
+type ThemeField = 'title' | 'palette';
+
+export const TweakThemeModal: React.FC<TweakThemeModalProps> = ({ isOpen, onClose, theme, onSaveToEvent }) => (
+  <Modal
+    isOpen={isOpen}
+    onClose={onClose}
+    size="xl"
+    icon={<Sparkles className="w-5 h-5 text-amber-600" />}
+    title="Customize & Tweak AI Theme"
+    description="Tailor colors, decor suggestions, music style, and surprise elements before applying to your celebration."
+  >
+    <TweakThemeForm theme={theme} onSaveToEvent={onSaveToEvent} onClose={onClose} />
+  </Modal>
+);
+
+const TweakThemeForm: React.FC<Omit<TweakThemeModalProps, 'isOpen'>> = ({ theme, onSaveToEvent, onClose }) => {
+  const [title, setTitle] = useState(theme.title ?? '');
+  const [tagline, setTagline] = useState(theme.tagline ?? '');
+  const [palette, setPalette] = useState<PaletteColor[]>(theme.palette ?? []);
+  const [decorIdeas, setDecorIdeas] = useState<string[]>(theme.decorIdeas ?? []);
   const [newDecorItem, setNewDecorItem] = useState('');
-  const [musicVibe, setMusicVibe] = useState(theme.musicVibe || '');
-  const [attirePrompt, setAttirePrompt] = useState(theme.attirePrompt || '');
-  const [signatureTouch, setSignatureTouch] = useState(theme.signatureTouch || '');
+  const [musicVibe, setMusicVibe] = useState(theme.musicVibe ?? '');
+  const [attirePrompt, setAttirePrompt] = useState(theme.attirePrompt ?? '');
+  const [signatureTouch, setSignatureTouch] = useState(theme.signatureTouch ?? '');
+  const { errors, check, clearError, formRef } = useFormErrors<ThemeField>();
 
-  const handleColorChange = (index: number, field: 'name' | 'hex', val: string) => {
-    const updated = [...palette];
-    updated[index] = { ...updated[index], [field]: val };
-    setPalette(updated);
+  const handleColorChange = (index: number, field: keyof PaletteColor, value: string) => {
+    setPalette((prev) => prev.map((c, i) => (i === index ? { ...c, [field]: value } : c)));
+    clearError('palette');
   };
 
   const handleAddDecor = () => {
-    if (newDecorItem.trim()) {
-      setDecorIdeas([...decorIdeas, newDecorItem.trim()]);
-      setNewDecorItem('');
-    }
+    const item = sanitizeText(newDecorItem, LIMITS.title);
+    if (!item || decorIdeas.length >= MAX_DECOR_IDEAS) return;
+    setDecorIdeas((prev) => [...prev, item]);
+    setNewDecorItem('');
   };
 
-  const handleRemoveDecor = (idx: number) => {
-    setDecorIdeas(decorIdeas.filter((_, i) => i !== idx));
-  };
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanTitle = sanitizeText(title, LIMITS.title);
+    const next: FieldErrors<ThemeField> = {};
+    if (!cleanTitle) next.title = 'Please give the theme a title.';
+    if (palette.some((c) => !isValidHex(c.hex))) next.palette = 'Each color must be a hex value like #FFCAD4.';
+    if (!check(next)) return;
 
-  const handleApply = () => {
     onSaveToEvent({
       ...theme,
-      title: title.trim(),
-      tagline: tagline.trim(),
-      palette,
+      title: cleanTitle,
+      tagline: sanitizeText(tagline, LIMITS.notes),
+      palette: palette.map((c) => ({ hex: c.hex, name: sanitizeText(c.name, LIMITS.short) })),
       decorIdeas,
-      musicVibe: musicVibe.trim(),
-      attirePrompt: attirePrompt.trim(),
-      signatureTouch: signatureTouch.trim(),
+      musicVibe: sanitizeText(musicVibe, LIMITS.title),
+      attirePrompt: sanitizeText(attirePrompt, LIMITS.title),
+      signatureTouch: sanitizeText(signatureTouch, LIMITS.title),
     });
     triggerFestiveConfetti();
     onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-stone-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-stone-200 relative animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
-        <button
-          onClick={onClose}
-          className="absolute top-5 right-5 p-2 rounded-full hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition"
-        >
-          <X className="w-5 h-5" />
-        </button>
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <RequiredFieldsNote />
+      <TextField
+        label="Theme Concept Title"
+        required
+        maxLength={LIMITS.title}
+        value={title}
+        error={errors.title}
+        onChange={(e) => {
+          setTitle(e.target.value);
+          clearError('title');
+        }}
+      />
 
-        <div className="flex items-center gap-2 mb-1">
-          <Sparkles className="w-5 h-5 text-amber-500" />
-          <h2 className="font-serif-title text-2xl font-bold text-stone-900">
-            Customize & Tweak AI Theme
-          </h2>
-        </div>
-        <p className="text-xs text-stone-500 mb-6">
-          Tailor colors, decor suggestions, music style, and surprise elements before applying to your celebration.
-        </p>
+      <TextAreaField
+        label="Atmosphere / Tagline"
+        maxLength={LIMITS.notes}
+        value={tagline}
+        onChange={(e) => setTagline(e.target.value)}
+      />
 
-        <div className="space-y-5">
-          {/* Theme Title & Tagline */}
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-              Theme Concept Title
-            </label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm font-semibold"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-              Atmosphere / Tagline
-            </label>
-            <textarea
-              rows={2}
-              value={tagline}
-              onChange={(e) => setTagline(e.target.value)}
-              className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-            />
-          </div>
-
-          {/* Color Palette Swatches */}
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-2">
-              Color Palette Swatches
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
-              {palette.map((color, idx) => (
-                <div key={idx} className="p-2 rounded-xl border border-stone-200 bg-stone-50/50 space-y-1.5">
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="color"
-                      value={color.hex}
-                      onChange={(e) => handleColorChange(idx, 'hex', e.target.value)}
-                      className="w-7 h-7 rounded-lg border-0 cursor-pointer p-0"
-                    />
-                    <input
-                      type="text"
-                      value={color.hex}
-                      onChange={(e) => handleColorChange(idx, 'hex', e.target.value)}
-                      className="w-full text-[10px] font-mono px-1 py-0.5 rounded bg-white border border-stone-200"
-                    />
-                  </div>
+      <fieldset aria-describedby={errors.palette ? 'theme-palette-error' : undefined}>
+        <legend className="block text-xs font-semibold uppercase tracking-wider text-stone-700 mb-2">
+          Color Palette Swatches
+        </legend>
+        <ul className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+          {palette.map((color, idx) => {
+            const hexInvalid = !isValidHex(color.hex);
+            const n = idx + 1;
+            return (
+              <li key={idx} className="p-2 rounded-xl border border-stone-300 bg-stone-50/50 space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="color"
+                    aria-label={`Color ${n} picker`}
+                    value={hexInvalid ? '#000000' : color.hex}
+                    onChange={(e) => handleColorChange(idx, 'hex', e.target.value)}
+                    className="w-7 h-7 shrink-0 rounded-lg border-0 cursor-pointer p-0"
+                  />
                   <input
                     type="text"
-                    value={color.name}
-                    onChange={(e) => handleColorChange(idx, 'name', e.target.value)}
-                    placeholder="Color Name"
-                    className="w-full text-[11px] px-1.5 py-1 rounded bg-white border border-stone-200"
+                    aria-label={`Color ${n} hex value`}
+                    aria-invalid={hexInvalid || undefined}
+                    maxLength={7}
+                    spellCheck={false}
+                    value={color.hex}
+                    onChange={(e) => handleColorChange(idx, 'hex', e.target.value.trim())}
+                    className={controlClass(hexInvalid, 'text-[11px] font-mono !px-1 !py-0.5 !rounded')}
                   />
                 </div>
-              ))}
-            </div>
-          </div>
+                <input
+                  type="text"
+                  aria-label={`Color ${n} name`}
+                  maxLength={LIMITS.short}
+                  value={color.name}
+                  onChange={(e) => handleColorChange(idx, 'name', e.target.value)}
+                  placeholder="Color Name"
+                  className={controlClass(false, 'text-[11px] !px-1.5 !py-1 !rounded')}
+                />
+              </li>
+            );
+          })}
+        </ul>
+        {errors.palette && (
+          <p id="theme-palette-error" className="mt-1 text-xs font-medium text-red-700">
+            {errors.palette}
+          </p>
+        )}
+      </fieldset>
 
-          {/* Decor Ideas List */}
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-2">
-              Curated Décor Ideas
-            </label>
-            <div className="space-y-2 mb-2">
-              {decorIdeas.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-stone-50 border border-stone-200/80 text-xs text-stone-800"
-                >
-                  <span className="flex-1 font-medium">{item}</span>
-                  <button
-                    onClick={() => handleRemoveDecor(idx)}
-                    className="text-stone-400 hover:text-red-500 p-1 rounded-lg transition"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Add another decor idea..."
-                value={newDecorItem}
-                onChange={(e) => setNewDecorItem(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddDecor())}
-                className="flex-1 px-3 py-1.5 rounded-xl border border-stone-200 text-xs"
-              />
-              <button
-                type="button"
-                onClick={handleAddDecor}
-                className="px-3 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-semibold text-xs flex items-center gap-1"
+      <fieldset>
+        <legend className="block text-xs font-semibold uppercase tracking-wider text-stone-700 mb-2">
+          Curated Décor Ideas
+        </legend>
+        {decorIdeas.length > 0 && (
+          <ul className="space-y-2 mb-2">
+            {decorIdeas.map((item, idx) => (
+              <li
+                key={`${idx}-${item}`}
+                className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-stone-50 border border-stone-200 text-xs text-stone-800"
               >
-                <Plus className="w-3.5 h-3.5" />
-                Add
-              </button>
-            </div>
-          </div>
-
-          {/* Music Vibe & Attire */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Music & Ambiance
-              </label>
-              <input
-                type="text"
-                value={musicVibe}
-                onChange={(e) => setMusicVibe(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 text-xs"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Guest Attire Cue
-              </label>
-              <input
-                type="text"
-                value={attirePrompt}
-                onChange={(e) => setAttirePrompt(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 text-xs"
-              />
-            </div>
-          </div>
-
-          {/* Signature Touch */}
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-              Signature Surprise Element
-            </label>
-            <input
-              type="text"
-              value={signatureTouch}
-              onChange={(e) => setSignatureTouch(e.target.value)}
-              className="w-full px-3.5 py-2 rounded-xl border border-stone-200 text-xs"
-            />
-          </div>
-
-          <div className="pt-4 border-t border-stone-100 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-stone-600 hover:text-stone-900 font-medium text-xs transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleApply}
-              className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs shadow-md transition flex items-center gap-1.5"
-            >
-              <Check className="w-4 h-4" />
-              <span>Apply Theme to Celebration</span>
-            </button>
-          </div>
+                <span className="flex-1 font-medium">{item}</span>
+                <IconButton
+                  label={`Remove décor idea: ${item}`}
+                  icon={Trash2}
+                  tone="danger"
+                  className="p-1 rounded-lg"
+                  onClick={() => setDecorIdeas((prev) => prev.filter((_, i) => i !== idx))}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex gap-2">
+          <input
+            type="text"
+            aria-label="New décor idea"
+            placeholder="Add another decor idea..."
+            maxLength={LIMITS.title}
+            value={newDecorItem}
+            onChange={(e) => setNewDecorItem(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleAddDecor();
+              }
+            }}
+            className={controlClass(false, 'flex-1 text-xs !py-1.5')}
+          />
+          <button
+            type="button"
+            onClick={handleAddDecor}
+            disabled={decorIdeas.length >= MAX_DECOR_IDEAS}
+            className="px-3 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 disabled:opacity-50 text-stone-800 font-semibold text-xs flex items-center gap-1"
+          >
+            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+            Add
+          </button>
         </div>
+      </fieldset>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <TextField
+          label="Music & Ambiance"
+          maxLength={LIMITS.title}
+          value={musicVibe}
+          onChange={(e) => setMusicVibe(e.target.value)}
+        />
+        <TextField
+          label="Guest Attire Cue"
+          maxLength={LIMITS.title}
+          value={attirePrompt}
+          onChange={(e) => setAttirePrompt(e.target.value)}
+        />
       </div>
-    </div>
+
+      <TextField
+        label="Signature Surprise Element"
+        maxLength={LIMITS.title}
+        value={signatureTouch}
+        onChange={(e) => setSignatureTouch(e.target.value)}
+      />
+
+      <ModalActions onCancel={onClose} submitLabel="Apply Theme to Celebration" tone="rose" />
+    </form>
   );
 };

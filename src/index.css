@@ -44,3 +44,109 @@
 .festive-gradient {
   background: linear-gradient(135deg, #FFF0EB 0%, #FBEBF7 50%, #F0F6F5 100%);
 }
+
+/* ---------------------------------------------------------------------------
+   Accessibility
+   ------------------------------------------------------------------------ */
+
+/* Clearly visible keyboard focus everywhere (mouse clicks stay ring-free). */
+:focus-visible {
+  outline: 3px solid #be123c; /* rose-700: >= 3:1 against cream and white */
+  outline-offset: 2px;
+}
+
+/* Skip link: off-screen until focused, then pinned top-left. */
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -100px;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  border-radius: 0.75rem;
+  background: #1c1917;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  top: 0.75rem;
+}
+
+/* Hide scrollbars on the horizontally scrolling tab strip. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Dialog entrance animation (disabled under reduced motion below). */
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.modal-panel {
+  animation: modal-pop 160ms ease-out;
+}
+
+/* Honour the OS "reduce motion" setting: near-instant animations/transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Live "run of show" highlight for the current timeline milestone. */
+.timeline-now {
+  box-shadow: 0 0 0 3px #be123c;
+}
+
+/* ---------------------------------------------------------------------------
+   Print
+   Anything marked data-print-hide (header, nav, action buttons, ...) is hidden.
+   When <body> has .printing-invitation, only .print-only-target is printed.
+   ------------------------------------------------------------------------ */
+@media print {
+  [data-print-hide],
+  .skip-link,
+  canvas {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  .pastel-card,
+  [data-print-card] {
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    break-inside: avoid;
+  }
+
+  body.printing-invitation * {
+    visibility: hidden;
+  }
+  body.printing-invitation .print-only-target,
+  body.printing-invitation .print-only-target * {
+    visibility: visible;
+  }
+  body.printing-invitation .print-only-target {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+  }
+}

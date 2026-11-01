@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { TimelineEvent } from '../../types';
-import { X, Check } from 'lucide-react';
+import { Modal, ModalActions } from '../ui/Modal';
+import { ChoiceGroup, ChoiceOption, RequiredFieldsNote, TextAreaField, TextField } from '../ui/FormField';
+import { FieldErrors, LIMITS, sanitizeText } from '../ui/form';
+import { useFormErrors } from '../ui/useFormErrors';
 
 interface TimelineModalProps {
   isOpen: boolean;
@@ -9,179 +12,126 @@ interface TimelineModalProps {
   initialEvent?: TimelineEvent | null;
 }
 
-const CATEGORIES: { id: TimelineEvent['category']; label: string; emoji: string }[] = [
-  { id: 'prep', label: 'Setup & Prep', emoji: '🛠️' },
-  { id: 'arrival', label: 'Guest Arrival', emoji: '🥂' },
-  { id: 'activity', label: 'Game / Activity', emoji: '🎯' },
-  { id: 'food', label: 'Feast & Food', emoji: '🍽️' },
-  { id: 'toast', label: 'Toast & Speech', emoji: '🎙️' },
-  { id: 'party', label: 'Cake & Dance', emoji: '💃' },
-  { id: 'wind_down', label: 'Farewell Send-off', emoji: '✨' },
+const CATEGORY_OPTIONS: ChoiceOption<TimelineEvent['category']>[] = [
+  { value: 'prep', label: '🛠️ Setup & Prep' },
+  { value: 'arrival', label: '🥂 Guest Arrival' },
+  { value: 'activity', label: '🎯 Game / Activity' },
+  { value: 'food', label: '🍽️ Feast & Food' },
+  { value: 'toast', label: '🎙️ Toast & Speech' },
+  { value: 'party', label: '💃 Cake & Dance' },
+  { value: 'wind_down', label: '✨ Farewell Send-off' },
 ];
 
-export const TimelineModal: React.FC<TimelineModalProps> = ({
-  isOpen,
-  onClose,
-  onSave,
-  initialEvent,
-}) => {
-  if (!isOpen) return null;
+type TimelineField = 'time' | 'title';
 
-  const [time, setTime] = useState(initialEvent?.time || '04:00 PM');
-  const [title, setTitle] = useState(initialEvent?.title || '');
-  const [description, setDescription] = useState(initialEvent?.description || '');
-  const [category, setCategory] = useState<TimelineEvent['category']>(initialEvent?.category || 'arrival');
-  const [assignedTo, setAssignedTo] = useState(initialEvent?.assignedTo || 'Host');
-  const [tips, setTips] = useState(initialEvent?.tips || '');
+export const TimelineModal: React.FC<TimelineModalProps> = ({ isOpen, onClose, ...formProps }) => (
+  <Modal
+    isOpen={isOpen}
+    onClose={onClose}
+    title={formProps.initialEvent ? 'Edit Milestone' : 'Add Day-Of Schedule Milestone'}
+    description="Orchestrate exact times, transitions, responsible coordinators, and reminders."
+  >
+    <TimelineForm onClose={onClose} {...formProps} />
+  </Modal>
+);
+
+const TimelineForm: React.FC<Omit<TimelineModalProps, 'isOpen'>> = ({ onClose, onSave, initialEvent }) => {
+  const [time, setTime] = useState(initialEvent?.time ?? '04:00 PM');
+  const [title, setTitle] = useState(initialEvent?.title ?? '');
+  const [description, setDescription] = useState(initialEvent?.description ?? '');
+  const [category, setCategory] = useState<TimelineEvent['category']>(initialEvent?.category ?? 'arrival');
+  const [assignedTo, setAssignedTo] = useState(initialEvent?.assignedTo ?? 'Host');
+  const [tips, setTips] = useState(initialEvent?.tips ?? '');
+  const { errors, check, clearError, formRef } = useFormErrors<TimelineField>();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
+    const cleanTime = sanitizeText(time, 20);
+    const cleanTitle = sanitizeText(title, LIMITS.title);
+    const next: FieldErrors<TimelineField> = {};
+    if (!cleanTime) next.time = 'Please enter a time, e.g. 04:30 PM.';
+    if (!cleanTitle) next.title = 'Please give this milestone a title.';
+    if (!check(next)) return;
 
     onSave({
-      id: initialEvent?.id || `tl-${Date.now()}`,
-      time: time.trim(),
-      title: title.trim(),
-      description: description.trim(),
+      id: initialEvent?.id ?? `tl-${Date.now()}`,
+      time: cleanTime,
+      title: cleanTitle,
+      description: sanitizeText(description, LIMITS.notes),
       category,
-      assignedTo: assignedTo.trim() || 'Host',
-      tips: tips.trim(),
-      completed: initialEvent?.completed || false,
+      assignedTo: sanitizeText(assignedTo, LIMITS.short) || 'Host',
+      tips: sanitizeText(tips, LIMITS.notes),
+      completed: initialEvent?.completed ?? false,
     });
     onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-stone-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-stone-200 relative animate-in fade-in zoom-in-95 duration-150">
-        <button
-          onClick={onClose}
-          className="absolute top-5 right-5 p-2 rounded-full hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition"
-        >
-          <X className="w-5 h-5" />
-        </button>
-
-        <h2 className="font-serif-title text-2xl font-bold text-stone-900 mb-1">
-          {initialEvent ? 'Edit Milestone' : 'Add Day-Of Schedule Milestone'}
-        </h2>
-        <p className="text-xs text-stone-500 mb-5">
-          Orchestrate exact times, transitions, responsible coordinators, and reminders.
-        </p>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Time *
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. 04:30 PM"
-                value={time}
-                onChange={(e) => setTime(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm font-semibold"
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Milestone Title *
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Welcome Spritz & Grazing Table"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm font-medium"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1.5">
-              Category
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {CATEGORIES.map((cat) => {
-                const isSelected = category === cat.id;
-                return (
-                  <button
-                    type="button"
-                    key={cat.id}
-                    onClick={() => setCategory(cat.id)}
-                    className={`flex items-center gap-1.5 p-2 rounded-xl text-left border text-xs font-medium transition ${
-                      isSelected
-                        ? 'border-rose-400 bg-rose-50/80 text-rose-900 font-semibold ring-1 ring-rose-400'
-                        : 'border-stone-200 bg-white hover:bg-stone-50 text-stone-700'
-                    }`}
-                  >
-                    <span>{cat.emoji}</span>
-                    <span className="truncate">{cat.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-              What Happens (Description)
-            </label>
-            <textarea
-              rows={2}
-              placeholder="e.g. Guests arrive through conservatory; acoustic playlist plays; drinks poured"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Assigned Lead / Person
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Elena (Host) & Catering Lead"
-                value={assignedTo}
-                onChange={(e) => setAssignedTo(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Day-of Pro Tip / Note
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Light candles 15 min prior"
-                value={tips}
-                onChange={(e) => setTips(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-              />
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-stone-100 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-stone-600 hover:text-stone-900 font-medium text-xs transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-semibold text-xs shadow-md transition flex items-center gap-1.5"
-            >
-              <Check className="w-4 h-4" />
-              <span>{initialEvent ? 'Save Changes' : 'Add Milestone'}</span>
-            </button>
-          </div>
-        </form>
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-4">
+      <RequiredFieldsNote />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <TextField
+          label="Time"
+          required
+          maxLength={20}
+          placeholder="e.g. 04:30 PM"
+          value={time}
+          error={errors.time}
+          onChange={(e) => {
+            setTime(e.target.value);
+            clearError('time');
+          }}
+        />
+        <TextField
+          label="Milestone Title"
+          required
+          className="sm:col-span-2"
+          maxLength={LIMITS.title}
+          placeholder="e.g. Welcome Spritz & Grazing Table"
+          value={title}
+          error={errors.title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            clearError('title');
+          }}
+        />
       </div>
-    </div>
+
+      <ChoiceGroup
+        legend="Category"
+        value={category}
+        onChange={setCategory}
+        options={CATEGORY_OPTIONS}
+        layoutClassName="grid grid-cols-2 sm:grid-cols-4 gap-2"
+        optionClassName="p-2 text-xs"
+      />
+
+      <TextAreaField
+        label="What Happens (Description)"
+        maxLength={LIMITS.notes}
+        placeholder="e.g. Guests arrive through conservatory; acoustic playlist plays; drinks poured"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+      />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <TextField
+          label="Assigned Lead / Person"
+          maxLength={LIMITS.short}
+          placeholder="e.g. Elena (Host) & Catering Lead"
+          value={assignedTo}
+          onChange={(e) => setAssignedTo(e.target.value)}
+        />
+        <TextField
+          label="Day-of Pro Tip / Note"
+          maxLength={LIMITS.notes}
+          placeholder="e.g. Light candles 15 min prior"
+          value={tips}
+          onChange={(e) => setTips(e.target.value)}
+        />
+      </div>
+
+      <ModalActions onCancel={onClose} submitLabel={initialEvent ? 'Save Changes' : 'Add Milestone'} />
+    </form>
   );
 };

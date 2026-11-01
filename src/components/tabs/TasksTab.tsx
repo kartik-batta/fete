@@ -1,25 +1,19 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ChecklistTask, EventData, TaskPhase } from '../../types';
-import {
-  CheckCircle2,
-  Circle,
-  Plus,
-  Clock,
-  Calendar,
-  AlertCircle,
-  Edit2,
-  Trash2,
-  Sparkles,
-  PartyPopper,
-} from 'lucide-react';
+import { AlertCircle, Calendar, Check, Edit2, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { TaskModal } from '../modals/TaskModal';
 import { triggerMiniConfetti, triggerFestiveConfetti } from '../../utils/confetti';
+import { IconButton } from '../ui/IconButton';
+import { LiveRegion, useAnnouncer } from '../ui/LiveRegion';
+import { isOverdue, sortByDueDate, toIsoDate } from './scheduleTime';
 
 interface TasksTabProps {
   event: EventData;
   onUpdateEvent: (updated: EventData) => void;
   onSwitchTab: (tab: string) => void;
 }
+
+type StatusFilter = 'all' | 'incomplete' | 'completed';
 
 const PHASES: { id: TaskPhase; title: string; subtitle: string }[] = [
   { id: '2_months_before', title: '2+ Months Before', subtitle: 'Big vision, venue lock-in & invitations' },
@@ -30,68 +24,98 @@ const PHASES: { id: TaskPhase; title: string; subtitle: string }[] = [
   { id: 'post_event', title: 'Post-Party Wrap Up', subtitle: 'Thank you cards & vendor reviews' },
 ];
 
+const PRIORITY_BADGE: Record<ChecklistTask['priority'], { label: string; className: string }> = {
+  high: { label: '🔥 High', className: 'bg-rose-100 text-rose-900' },
+  medium: { label: '⚡ Med', className: 'bg-amber-100 text-amber-900' },
+  low: { label: '🌱 Low', className: 'bg-emerald-100 text-emerald-900' },
+};
+
+const formatDue = (iso: string) =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
 export const TasksTab: React.FC<TasksTabProps> = ({ event, onUpdateEvent, onSwitchTab }) => {
-  const [filterStatus, setFilterStatus] = useState<'all' | 'incomplete' | 'completed'>('all');
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>('all');
   const [filterPriority, setFilterPriority] = useState<string>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<ChecklistTask | null>(null);
+  const { message, announce } = useAnnouncer();
 
+  const today = toIsoDate(new Date());
   const completedCount = event.tasks.filter((t) => t.completed).length;
   const totalCount = event.tasks.length;
+  const overdueCount = event.tasks.filter((t) => isOverdue(t, today)).length;
   const percentage = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
-  const handleToggleTask = (taskId: string, e: React.MouseEvent) => {
-    let firedAllDone = false;
-    const updatedTasks = event.tasks.map((t) => {
-      if (t.id === taskId) {
-        const nextState = !t.completed;
-        if (nextState) {
-          const rect = (e.target as HTMLElement).getBoundingClientRect();
-          triggerMiniConfetti(rect.x / window.innerWidth, rect.y / window.innerHeight);
+  /** Tasks grouped by phase, filtered and sorted by due date (computed once per render input). */
+  const tasksByPhase = useMemo(() => {
+    const visible = sortByDueDate(
+      event.tasks.filter(
+        (t) =>
+          (filterStatus === 'all' || (filterStatus === 'completed') === t.completed) &&
+          (filterPriority === 'all' || t.priority === filterPriority),
+      ),
+    );
+    const groups = new Map<TaskPhase, ChecklistTask[]>(PHASES.map((p) => [p.id, []]));
+    visible.forEach((t) => groups.get(t.phase)?.push(t));
+    return groups;
+  }, [event.tasks, filterStatus, filterPriority]);
 
-          // Check if this was the last remaining task!
-          const remainingIncomplete = event.tasks.filter((other) => other.id !== taskId && !other.completed);
-          if (remainingIncomplete.length === 0) {
-            firedAllDone = true;
-          }
-        }
-        return { ...t, completed: nextState };
-      }
-      return t;
-    });
-
+  const handleToggleTask = (task: ChecklistTask, e: React.MouseEvent<HTMLButtonElement>) => {
+    const nextState = !task.completed;
+    const updatedTasks = event.tasks.map((t) => (t.id === task.id ? { ...t, completed: nextState } : t));
     onUpdateEvent({ ...event, tasks: updatedTasks });
-    if (firedAllDone) {
-      setTimeout(() => triggerFestiveConfetti(), 300);
+    announce(`${task.title} marked ${nextState ? 'complete' : 'not complete'}.`);
+
+    if (nextState) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      triggerMiniConfetti(rect.x / window.innerWidth, rect.y / window.innerHeight);
+      if (updatedTasks.every((t) => t.completed)) {
+        setTimeout(() => triggerFestiveConfetti(), 300);
+      }
     }
   };
 
   const handleSaveTask = (task: ChecklistTask) => {
-    let updated: ChecklistTask[];
     if (editingTask) {
-      updated = event.tasks.map((t) => (t.id === task.id ? task : t));
+      onUpdateEvent({ ...event, tasks: event.tasks.map((t) => (t.id === task.id ? task : t)) });
+      announce(`Updated task ${task.title}.`);
     } else {
-      updated = [...event.tasks, task];
+      onUpdateEvent({ ...event, tasks: [...event.tasks, task] });
       triggerMiniConfetti(0.5, 0.5);
+      announce(`Added task ${task.title}.`);
     }
-    onUpdateEvent({ ...event, tasks: updated });
     setEditingTask(null);
   };
 
-  const handleDeleteTask = (id: string) => {
-    if (confirm('Delete this task?')) {
-      const updated = event.tasks.filter((t) => t.id !== id);
-      onUpdateEvent({ ...event, tasks: updated });
+  const handleDeleteTask = (task: ChecklistTask) => {
+    if (window.confirm(`Delete the task "${task.title}"?`)) {
+      onUpdateEvent({ ...event, tasks: event.tasks.filter((t) => t.id !== task.id) });
+      announce(`Deleted task ${task.title}.`);
     }
   };
 
+  const statusFilters: { id: StatusFilter; label: string; count: number; active: string }[] = [
+    { id: 'all', label: 'All Tasks', count: totalCount, active: 'bg-stone-900 text-white' },
+    { id: 'incomplete', label: 'To-Do', count: totalCount - completedCount, active: 'bg-rose-700 text-white' },
+    { id: 'completed', label: 'Completed', count: completedCount, active: 'bg-emerald-700 text-white' },
+  ];
+
   return (
     <div className="space-y-6">
+      <LiveRegion message={message} />
+
       {/* Progress Header Card */}
       <div className="bg-white p-6 rounded-3xl border border-[#EFE5D8] shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4 w-full sm:w-auto">
-          <div className="relative w-16 h-16 flex-shrink-0 flex items-center justify-center">
-            <svg className="w-16 h-16 -rotate-90" viewBox="0 0 36 36">
+          <div
+            role="progressbar"
+            aria-label="Checklist completion"
+            aria-valuenow={percentage}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            className="relative w-16 h-16 flex-shrink-0 flex items-center justify-center"
+          >
+            <svg className="w-16 h-16 -rotate-90" viewBox="0 0 36 36" aria-hidden="true">
               <path
                 className="text-stone-100"
                 strokeWidth="3.5"
@@ -100,7 +124,7 @@ export const TasksTab: React.FC<TasksTabProps> = ({ event, onUpdateEvent, onSwit
                 d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
               />
               <path
-                className="text-emerald-500 transition-all duration-700 ease-out"
+                className="text-emerald-600 transition-all duration-700 ease-out"
                 strokeDasharray={`${percentage}, 100`}
                 strokeWidth="3.5"
                 strokeLinecap="round"
@@ -109,35 +133,43 @@ export const TasksTab: React.FC<TasksTabProps> = ({ event, onUpdateEvent, onSwit
                 d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
               />
             </svg>
-            <span className="absolute font-bold text-sm text-stone-800">{percentage}%</span>
+            <span className="absolute font-bold text-sm text-stone-800" aria-hidden="true">
+              {percentage}%
+            </span>
           </div>
 
           <div>
-            <h2 className="font-serif-title text-xl font-bold text-stone-900">
-              Celebration Readiness
-            </h2>
-            <p className="text-xs text-stone-500 mt-0.5">
+            <h2 className="font-serif-title text-xl font-bold text-stone-900">Celebration Readiness</h2>
+            <p className="text-xs text-stone-600 mt-0.5">
               {completedCount} of {totalCount} milestone checklist items completed.
             </p>
+            {overdueCount > 0 && (
+              <p className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-red-700">
+                <AlertCircle className="w-3.5 h-3.5" aria-hidden="true" />
+                {overdueCount} overdue {overdueCount === 1 ? 'task' : 'tasks'}
+              </p>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
           <button
+            type="button"
             onClick={() => onSwitchTab('ai-concierge')}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold border border-rose-200 transition"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-semibold border border-rose-200 transition"
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
             <span>AI Decor & Ideas</span>
           </button>
           <button
+            type="button"
             onClick={() => {
               setEditingTask(null);
               setIsModalOpen(true);
             }}
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-stone-900 hover:bg-stone-800 text-white text-xs font-semibold shadow-xs transition"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-4 h-4" aria-hidden="true" />
             <span>Add Task</span>
           </button>
         </div>
@@ -145,45 +177,31 @@ export const TasksTab: React.FC<TasksTabProps> = ({ event, onUpdateEvent, onSwit
 
       {/* Filter Strip */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-[#EFE5D8] shadow-xs text-xs">
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setFilterStatus('all')}
-            className={`px-3 py-1.5 rounded-xl font-semibold transition ${
-              filterStatus === 'all'
-                ? 'bg-stone-900 text-white'
-                : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-            }`}
-          >
-            All Tasks ({event.tasks.length})
-          </button>
-          <button
-            onClick={() => setFilterStatus('incomplete')}
-            className={`px-3 py-1.5 rounded-xl font-semibold transition ${
-              filterStatus === 'incomplete'
-                ? 'bg-rose-500 text-white'
-                : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-            }`}
-          >
-            To-Do ({event.tasks.filter((t) => !t.completed).length})
-          </button>
-          <button
-            onClick={() => setFilterStatus('completed')}
-            className={`px-3 py-1.5 rounded-xl font-semibold transition ${
-              filterStatus === 'completed'
-                ? 'bg-emerald-600 text-white'
-                : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-            }`}
-          >
-            Completed ({completedCount})
-          </button>
+        <div role="group" aria-label="Filter tasks by status" className="flex items-center gap-1.5">
+          {statusFilters.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              aria-pressed={filterStatus === f.id}
+              onClick={() => setFilterStatus(f.id)}
+              className={`px-3 py-1.5 rounded-xl font-semibold transition ${
+                filterStatus === f.id ? f.active : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+              }`}
+            >
+              {f.label} ({f.count})
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-stone-400 font-medium">Priority:</span>
+          <label htmlFor="task-priority-filter" className="text-stone-700 font-medium">
+            Priority:
+          </label>
           <select
+            id="task-priority-filter"
             value={filterPriority}
             onChange={(e) => setFilterPriority(e.target.value)}
-            className="py-1 px-2.5 rounded-xl border border-stone-200 bg-white text-stone-700 text-xs"
+            className="py-1 px-2.5 rounded-xl border border-stone-300 bg-white text-stone-800 text-xs"
           >
             <option value="all">All Priorities</option>
             <option value="high">High Priority</option>
@@ -196,138 +214,125 @@ export const TasksTab: React.FC<TasksTabProps> = ({ event, onUpdateEvent, onSwit
       {/* Tasks Grouped by Phase */}
       <div className="space-y-6">
         {PHASES.map((phase) => {
-          const phaseTasks = event.tasks.filter((t) => {
-            const matchesPhase = t.phase === phase.id;
-            const matchesStatus =
-              filterStatus === 'all' ||
-              (filterStatus === 'completed' && t.completed) ||
-              (filterStatus === 'incomplete' && !t.completed);
-            const matchesPriority =
-              filterPriority === 'all' || t.priority === filterPriority;
-            return matchesPhase && matchesStatus && matchesPriority;
-          });
-
-          if (phaseTasks.length === 0 && filterStatus !== 'all') {
-            return null;
-          }
-
+          const phaseTasks = tasksByPhase.get(phase.id) ?? [];
+          if (phaseTasks.length === 0 && filterStatus !== 'all') return null;
           const phaseCompleted = phaseTasks.filter((t) => t.completed).length;
+          const headingId = `phase-heading-${phase.id}`;
 
           return (
-            <div
+            <section
               key={phase.id}
+              aria-labelledby={headingId}
               className="bg-white rounded-3xl border border-[#EFE5D8] overflow-hidden shadow-xs"
             >
-              {/* Phase Header */}
               <div className="bg-[#FAF7F2] px-6 py-4 border-b border-[#EFE5D8] flex items-center justify-between">
                 <div>
-                  <h3 className="font-serif-title text-base font-bold text-stone-900">
+                  <h3 id={headingId} className="font-serif-title text-base font-bold text-stone-900">
                     {phase.title}
                   </h3>
-                  <p className="text-[11px] text-stone-500">{phase.subtitle}</p>
+                  <p className="text-[11px] text-stone-600">{phase.subtitle}</p>
                 </div>
-                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-stone-200/70 text-stone-700">
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-stone-200/70 text-stone-800">
                   {phaseCompleted}/{phaseTasks.length} done
                 </span>
               </div>
 
-              {/* Tasks List */}
-              <div className="divide-y divide-stone-100">
-                {phaseTasks.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-stone-400 italic">
-                    No tasks currently in this phase.
-                  </div>
-                ) : (
-                  phaseTasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className={`p-4 sm:px-6 flex items-start justify-between gap-3 transition ${
-                        task.completed ? 'bg-stone-50/50 opacity-70' : 'hover:bg-stone-50/70'
-                      }`}
-                    >
-                      <div className="flex items-start gap-3.5 flex-1">
-                        <button
-                          onClick={(e) => handleToggleTask(task.id, e)}
-                          className={`mt-0.5 w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all ${
-                            task.completed
-                              ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs'
-                              : 'border-stone-300 hover:border-emerald-500 bg-white'
-                          }`}
-                        >
-                          {task.completed && <CheckCircle2 className="w-4 h-4 text-white" />}
-                        </button>
-
-                        <div className="space-y-1">
-                          <span
-                            className={`text-sm font-medium transition ${
+              {phaseTasks.length === 0 ? (
+                <p className="py-6 text-center text-xs text-stone-600 italic">No tasks currently in this phase.</p>
+              ) : (
+                <ul className="divide-y divide-stone-100">
+                  {phaseTasks.map((task) => {
+                    const overdue = isOverdue(task, today);
+                    const priority = PRIORITY_BADGE[task.priority];
+                    return (
+                      <li
+                        key={task.id}
+                        className={`p-4 sm:px-6 flex items-start justify-between gap-3 transition ${
+                          task.completed ? 'bg-stone-50/50' : 'hover:bg-stone-50/70'
+                        } ${overdue ? 'border-l-4 border-red-600' : ''}`}
+                      >
+                        <div className="flex items-start gap-3.5 flex-1">
+                          <button
+                            type="button"
+                            role="checkbox"
+                            aria-checked={task.completed}
+                            aria-label={`Mark "${task.title}" complete`}
+                            onClick={(e) => handleToggleTask(task, e)}
+                            className={`mt-0.5 w-5 h-5 shrink-0 rounded-md border-2 flex items-center justify-center transition-all ${
                               task.completed
-                                ? 'line-through text-stone-400'
-                                : 'text-stone-900'
+                                ? 'bg-emerald-700 border-emerald-700 text-white shadow-xs'
+                                : 'border-stone-500 hover:border-emerald-600 bg-white'
                             }`}
                           >
-                            {task.title}
-                          </span>
+                            {task.completed && <Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden="true" />}
+                          </button>
 
-                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-stone-500">
-                            {task.dueDate && (
-                              <span className="flex items-center gap-1 font-medium text-stone-600">
-                                <Calendar className="w-3 h-3 text-stone-400" />
-                                Due {task.dueDate}
-                              </span>
-                            )}
-                            <span>•</span>
-                            <span>Assigned: {task.assignedTo}</span>
+                          <div className="space-y-1">
+                            <span
+                              className={`text-sm font-medium transition ${
+                                task.completed ? 'line-through text-stone-600' : 'text-stone-900'
+                              }`}
+                            >
+                              {task.title}
+                            </span>
+                            {task.completed && <span className="sr-only"> (completed)</span>}
 
-                            {task.notes && (
-                              <>
-                                <span>•</span>
-                                <span className="italic text-stone-400 truncate max-w-xs">
-                                  {task.notes}
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-stone-600">
+                              {task.dueDate && (
+                                <span
+                                  className={`flex items-center gap-1 font-medium ${
+                                    overdue ? 'text-red-700 font-semibold' : 'text-stone-700'
+                                  }`}
+                                >
+                                  {overdue ? (
+                                    <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                                  ) : (
+                                    <Calendar className="w-3 h-3 text-stone-500" aria-hidden="true" />
+                                  )}
+                                  {overdue ? 'Overdue · was due' : 'Due'}{' '}
+                                  <time dateTime={task.dueDate}>{formatDue(task.dueDate)}</time>
                                 </span>
-                              </>
-                            )}
+                              )}
+                              <span aria-hidden="true">•</span>
+                              <span>Assigned: {task.assignedTo}</span>
+                              {task.notes && (
+                                <>
+                                  <span aria-hidden="true">•</span>
+                                  <span className="italic text-stone-600 truncate max-w-xs">{task.notes}</span>
+                                </>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <span
-                          className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full capitalize ${
-                            task.priority === 'high'
-                              ? 'bg-rose-100 text-rose-800'
-                              : task.priority === 'medium'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-emerald-100 text-emerald-800'
-                          }`}
-                        >
-                          {task.priority === 'high' ? '🔥 High' : task.priority === 'medium' ? '⚡ Med' : '🌱 Low'}
-                        </span>
-
-                        <div className="flex items-center">
-                          <button
-                            onClick={() => {
-                              setEditingTask(task);
-                              setIsModalOpen(true);
-                            }}
-                            className="p-1.5 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 transition"
-                            title="Edit"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteTask(task.id)}
-                            className="p-1.5 text-stone-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${priority.className}`}>
+                            <span className="sr-only">Priority: </span>
+                            {priority.label}
+                          </span>
+                          <div className="flex items-center">
+                            <IconButton
+                              label={`Edit task: ${task.title}`}
+                              icon={Edit2}
+                              onClick={() => {
+                                setEditingTask(task);
+                                setIsModalOpen(true);
+                              }}
+                            />
+                            <IconButton
+                              label={`Delete task: ${task.title}`}
+                              icon={Trash2}
+                              tone="danger"
+                              onClick={() => handleDeleteTask(task)}
+                            />
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
           );
         })}
       </div>

@@ -4,7 +4,6 @@ import {
   Users,
   Plus,
   Search,
-  Filter,
   Download,
   Mail,
   Phone,
@@ -17,6 +16,17 @@ import {
 } from 'lucide-react';
 import { GuestModal } from '../modals/GuestModal';
 import { triggerMiniConfetti, triggerFestiveConfetti } from '../../utils/confetti';
+import { IconButton } from '../ui/IconButton';
+import { LiveRegion, useAnnouncer } from '../ui/LiveRegion';
+import { csvFileName, downloadCsv, guestsToCsv } from './guestsCsv';
+
+type Rsvp = Guest['rsvp'];
+
+const RSVP_CHOICES: { value: Rsvp; label: string; activeClass: string; hoverClass: string }[] = [
+  { value: 'attending', label: 'Attending', activeClass: 'bg-emerald-700 text-white shadow-xs', hoverClass: 'hover:text-emerald-800' },
+  { value: 'pending', label: 'Pending', activeClass: 'bg-amber-700 text-white shadow-xs', hoverClass: 'hover:text-amber-800' },
+  { value: 'declined', label: 'Declined', activeClass: 'bg-stone-700 text-white shadow-xs', hoverClass: 'hover:text-stone-900' },
+];
 
 interface GuestsTabProps {
   event: EventData;
@@ -29,6 +39,7 @@ export const GuestsTab: React.FC<GuestsTabProps> = ({ event, onUpdateEvent }) =>
   const [filterGroup, setFilterGroup] = useState<string>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingGuest, setEditingGuest] = useState<Guest | null>(null);
+  const { message, announce } = useAnnouncer();
 
   // Metrics
   const attendingGuests = event.guests.filter((g) => g.rsvp === 'attending');
@@ -37,12 +48,11 @@ export const GuestsTab: React.FC<GuestsTabProps> = ({ event, onUpdateEvent }) =>
   const declinedCount = event.guests.filter((g) => g.rsvp === 'declined').length;
 
   // Filtered list
+  const query = search.trim().toLowerCase();
   const filteredGuests = event.guests.filter((g) => {
     const matchesSearch =
-      g.name.toLowerCase().includes(search.toLowerCase()) ||
-      g.email.toLowerCase().includes(search.toLowerCase()) ||
-      g.dietary.toLowerCase().includes(search.toLowerCase()) ||
-      (g.tableNumber && g.tableNumber.toLowerCase().includes(search.toLowerCase()));
+      !query ||
+      [g.name, g.email, g.dietary, g.tableNumber].some((field) => field?.toLowerCase().includes(query));
 
     const matchesRsvp = filterRsvp === 'all' || g.rsvp === filterRsvp;
     const matchesGroup = filterGroup === 'all' || g.group === filterGroup;
@@ -61,126 +71,82 @@ export const GuestsTab: React.FC<GuestsTabProps> = ({ event, onUpdateEvent }) =>
       }
     }
     onUpdateEvent({ ...event, guests: updatedGuests });
+    announce(editingGuest ? `Updated ${guest.name}.` : `Added ${guest.name} to the guest list.`);
     setEditingGuest(null);
   };
 
-  const handleDeleteGuest = (id: string) => {
-    if (confirm('Are you sure you want to remove this guest?')) {
-      const updatedGuests = event.guests.filter((g) => g.id !== id);
-      onUpdateEvent({ ...event, guests: updatedGuests });
+  const handleDeleteGuest = (guest: Guest) => {
+    if (window.confirm(`Remove ${guest.name} from the guest list?`)) {
+      onUpdateEvent({ ...event, guests: event.guests.filter((g) => g.id !== guest.id) });
+      announce(`Removed ${guest.name}.`);
     }
   };
 
-  const handleQuickRsvpChange = (guestId: string, newRsvp: 'attending' | 'declined' | 'pending', e: React.MouseEvent) => {
+  const handleQuickRsvpChange = (guest: Guest, newRsvp: Rsvp, e: React.MouseEvent<HTMLButtonElement>) => {
+    if (guest.rsvp === newRsvp) return;
     if (newRsvp === 'attending') {
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      const rect = e.currentTarget.getBoundingClientRect();
       triggerMiniConfetti(rect.x / window.innerWidth, rect.y / window.innerHeight);
     }
-    const updated = event.guests.map((g) => (g.id === guestId ? { ...g, rsvp: newRsvp } : g));
+    const updated = event.guests.map((g) => (g.id === guest.id ? { ...g, rsvp: newRsvp } : g));
     onUpdateEvent({ ...event, guests: updated });
+    announce(`${guest.name} marked ${newRsvp}.`);
   };
 
   const handleExportCSV = () => {
-    const headers = ['Name', 'RSVP Status', 'Plus Ones', 'Total Seats', 'Dietary Requirements', 'Group', 'Table', 'Email', 'Phone', 'Notes'];
-    const rows = event.guests.map((g) => [
-      `"${g.name}"`,
-      `"${g.rsvp}"`,
-      g.plusOnes,
-      g.plusOnes + 1,
-      `"${g.dietary || 'None'}"`,
-      `"${g.group}"`,
-      `"${g.tableNumber || ''}"`,
-      `"${g.email || ''}"`,
-      `"${g.phone || ''}"`,
-      `"${g.notes || ''}"`,
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `${event.title.replace(/\s+/g, '_')}_Guest_List.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsv(guestsToCsv(event.guests), csvFileName(event.title));
+    announce(`Exported ${event.guests.length} guests to CSV.`);
   };
+
+  const metricCards = [
+    { label: 'Total Headcount', value: totalAttendingHeadcount, note: 'Confirmed guests + plus-ones', icon: Users, box: 'bg-white border-[#EFE5D8]', head: 'text-stone-700', num: 'text-stone-900', sub: 'text-stone-600', iconColor: 'text-rose-600' },
+    { label: 'Attending', value: attendingGuests.length, note: 'RSVPs accepted', icon: CheckCircle2, box: 'bg-emerald-50/50 border-emerald-100', head: 'text-emerald-900', num: 'text-emerald-800', sub: 'text-emerald-800', iconColor: 'text-emerald-700' },
+    { label: 'Pending', value: pendingCount, note: 'Awaiting response', icon: Clock, box: 'bg-amber-50/50 border-amber-100', head: 'text-amber-900', num: 'text-amber-800', sub: 'text-amber-800', iconColor: 'text-amber-700' },
+    { label: 'Declined', value: declinedCount, note: 'Cannot make it', icon: XCircle, box: 'bg-stone-50 border-stone-200', head: 'text-stone-700', num: 'text-stone-700', sub: 'text-stone-600', iconColor: 'text-stone-600' },
+  ];
 
   return (
     <div className="space-y-6">
+      <LiveRegion message={message} />
+
       {/* Headcount Metric Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-        <div className="p-4 sm:p-5 rounded-3xl bg-white border border-[#EFE5D8] shadow-xs">
-          <div className="flex items-center justify-between text-stone-500 mb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider">Total Headcount</span>
-            <Users className="w-4 h-4 text-rose-500" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-stone-900">
-            {totalAttendingHeadcount}
-          </div>
-          <p className="text-[11px] text-stone-500 mt-0.5">
-            Confirmed guests + plus-ones
-          </p>
-        </div>
-
-        <div className="p-4 sm:p-5 rounded-3xl bg-emerald-50/50 border border-emerald-100 shadow-xs">
-          <div className="flex items-center justify-between text-emerald-800 mb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider">Attending</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-emerald-800">
-            {attendingGuests.length}
-          </div>
-          <p className="text-[11px] text-emerald-600 mt-0.5">
-            RSVPs accepted
-          </p>
-        </div>
-
-        <div className="p-4 sm:p-5 rounded-3xl bg-amber-50/50 border border-amber-100 shadow-xs">
-          <div className="flex items-center justify-between text-amber-800 mb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider">Pending</span>
-            <Clock className="w-4 h-4 text-amber-600" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-amber-800">
-            {pendingCount}
-          </div>
-          <p className="text-[11px] text-amber-600 mt-0.5">
-            Awaiting response
-          </p>
-        </div>
-
-        <div className="p-4 sm:p-5 rounded-3xl bg-stone-50 border border-stone-200 shadow-xs">
-          <div className="flex items-center justify-between text-stone-500 mb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider">Declined</span>
-            <XCircle className="w-4 h-4 text-stone-400" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-stone-700">
-            {declinedCount}
-          </div>
-          <p className="text-[11px] text-stone-400 mt-0.5">
-            Cannot make it
-          </p>
-        </div>
-      </div>
+      <ul className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4" aria-label="RSVP summary">
+        {metricCards.map(({ label, value, note, icon: Icon, box, head, num, sub, iconColor }) => (
+          <li key={label} className={`p-4 sm:p-5 rounded-3xl border shadow-xs ${box}`}>
+            <div className={`flex items-center justify-between mb-1 ${head}`}>
+              <span className="text-[11px] font-semibold uppercase tracking-wider">{label}</span>
+              <Icon className={`w-4 h-4 ${iconColor}`} aria-hidden="true" />
+            </div>
+            <div className={`text-2xl sm:text-3xl font-bold ${num}`}>{value}</div>
+            <p className={`text-[11px] mt-0.5 ${sub}`}>{note}</p>
+          </li>
+        ))}
+      </ul>
 
       {/* Control Bar: Search, Filters, Add Guest, Export */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white p-4 rounded-3xl border border-[#EFE5D8] shadow-xs">
+      <div
+        role="search"
+        className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white p-4 rounded-3xl border border-[#EFE5D8] shadow-xs"
+      >
         <div className="flex flex-1 items-center gap-2">
           <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-stone-500 absolute left-3.5 top-1/2 -translate-y-1/2" aria-hidden="true" />
             <input
-              type="text"
+              type="search"
+              aria-label="Search guests"
               placeholder="Search by name, table, allergy, or email..."
+              maxLength={100}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-stone-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-rose-300"
+              className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-stone-300 text-xs sm:text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
             />
           </div>
 
-          {/* RSVP Filter */}
           <select
+            aria-label="Filter by RSVP status"
             value={filterRsvp}
             onChange={(e) => setFilterRsvp(e.target.value)}
-            className="py-2 px-3 rounded-xl border border-stone-200 text-xs bg-white text-stone-700"
+            className="py-2 px-3 rounded-xl border border-stone-300 text-xs bg-white text-stone-800"
           >
             <option value="all">All RSVPs</option>
             <option value="attending">Attending</option>
@@ -188,37 +154,41 @@ export const GuestsTab: React.FC<GuestsTabProps> = ({ event, onUpdateEvent }) =>
             <option value="declined">Declined</option>
           </select>
 
-          {/* Group Filter */}
           <select
+            aria-label="Filter by guest group"
             value={filterGroup}
             onChange={(e) => setFilterGroup(e.target.value)}
-            className="py-2 px-3 rounded-xl border border-stone-200 text-xs bg-white text-stone-700 hidden sm:block"
+            className="py-2 px-3 rounded-xl border border-stone-300 text-xs bg-white text-stone-800 hidden sm:block"
           >
             <option value="all">All Groups</option>
             <option value="friends">Friends</option>
             <option value="family">Family</option>
             <option value="colleagues">Colleagues</option>
             <option value="vip">VIP</option>
+            <option value="other">Other</option>
           </select>
         </div>
 
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={handleExportCSV}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-stone-200 hover:bg-stone-50 text-stone-700 text-xs font-semibold transition"
+            disabled={event.guests.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-stone-300 hover:bg-stone-50 disabled:opacity-50 text-stone-800 text-xs font-semibold transition"
           >
-            <Download className="w-3.5 h-3.5" />
+            <Download className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Export CSV</span>
           </button>
 
           <button
+            type="button"
             onClick={() => {
               setEditingGuest(null);
               setIsModalOpen(true);
             }}
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-stone-900 hover:bg-stone-800 text-white text-xs font-semibold shadow-xs transition"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-4 h-4" aria-hidden="true" />
             <span>Add Guest</span>
           </button>
         </div>
@@ -228,149 +198,125 @@ export const GuestsTab: React.FC<GuestsTabProps> = ({ event, onUpdateEvent }) =>
       <div className="bg-white rounded-3xl border border-[#EFE5D8] overflow-hidden shadow-xs">
         {filteredGuests.length === 0 ? (
           <div className="text-center py-12 px-4">
-            <Users className="w-10 h-10 text-stone-300 mx-auto mb-2" />
+            <Users className="w-10 h-10 text-stone-400 mx-auto mb-2" aria-hidden="true" />
             <h3 className="font-serif-title text-base font-bold text-stone-800">No guests match your criteria</h3>
-            <p className="text-xs text-stone-500 mt-1">Try clearing search filters or add a new guest.</p>
+            <p className="text-xs text-stone-600 mt-1">Try clearing search filters or add a new guest.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-[#FAF7F2] border-b border-[#EFE5D8] text-stone-500 font-semibold uppercase tracking-wider text-[10px]">
+              <caption className="sr-only">
+                Guest list: showing {filteredGuests.length} of {event.guests.length} guests
+              </caption>
+              <thead className="bg-[#FAF7F2] border-b border-[#EFE5D8] text-stone-700 font-semibold uppercase tracking-wider text-[10px]">
                 <tr>
-                  <th className="py-3 px-4 sm:px-6">Guest</th>
-                  <th className="py-3 px-3">RSVP Status</th>
-                  <th className="py-3 px-3 text-center">+1s</th>
-                  <th className="py-3 px-3">Dietary / Allergies</th>
-                  <th className="py-3 px-3">Seating / Group</th>
-                  <th className="py-3 px-3">Notes</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                  <th scope="col" className="py-3 px-4 sm:px-6">Guest</th>
+                  <th scope="col" className="py-3 px-3">RSVP Status</th>
+                  <th scope="col" className="py-3 px-3 text-center">
+                    <abbr title="Plus ones" className="no-underline">+1s</abbr>
+                  </th>
+                  <th scope="col" className="py-3 px-3">Dietary / Allergies</th>
+                  <th scope="col" className="py-3 px-3">Seating / Group</th>
+                  <th scope="col" className="py-3 px-3">Notes</th>
+                  <th scope="col" className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {filteredGuests.map((guest) => {
-                  return (
-                    <tr key={guest.id} className="hover:bg-stone-50/60 transition group">
-                      {/* Name & Contact */}
-                      <td className="py-3.5 px-4 sm:px-6">
-                        <div className="font-semibold text-stone-900 text-sm">
-                          {guest.name}
-                        </div>
-                        <div className="flex items-center gap-2 text-[11px] text-stone-500 mt-0.5">
-                          {guest.email && (
-                            <span className="flex items-center gap-1 truncate max-w-[150px]">
-                              <Mail className="w-3 h-3 text-stone-400" />
-                              {guest.email}
-                            </span>
-                          )}
-                          {guest.phone && (
-                            <span className="flex items-center gap-1">
-                              <Phone className="w-3 h-3 text-stone-400" />
-                              {guest.phone}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* RSVP dropdown pill */}
-                      <td className="py-3.5 px-3">
-                        <div className="inline-flex rounded-xl p-0.5 bg-stone-100 border border-stone-200">
-                          <button
-                            onClick={(e) => handleQuickRsvpChange(guest.id, 'attending', e)}
-                            title="Mark Attending"
-                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition ${
-                              guest.rsvp === 'attending'
-                                ? 'bg-emerald-600 text-white shadow-xs'
-                                : 'text-stone-600 hover:text-emerald-700'
-                            }`}
-                          >
-                            Attending
-                          </button>
-                          <button
-                            onClick={(e) => handleQuickRsvpChange(guest.id, 'pending', e)}
-                            title="Mark Pending"
-                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition ${
-                              guest.rsvp === 'pending'
-                                ? 'bg-amber-500 text-white shadow-xs'
-                                : 'text-stone-600 hover:text-amber-700'
-                            }`}
-                          >
-                            Pending
-                          </button>
-                          <button
-                            onClick={(e) => handleQuickRsvpChange(guest.id, 'declined', e)}
-                            title="Mark Declined"
-                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition ${
-                              guest.rsvp === 'declined'
-                                ? 'bg-stone-600 text-white shadow-xs'
-                                : 'text-stone-600 hover:text-stone-900'
-                            }`}
-                          >
-                            Declined
-                          </button>
-                        </div>
-                      </td>
-
-                      {/* Plus Ones */}
-                      <td className="py-3.5 px-3 text-center">
-                        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-stone-100 font-bold text-stone-700">
-                          {guest.plusOnes > 0 ? `+${guest.plusOnes}` : '0'}
-                        </span>
-                      </td>
-
-                      {/* Dietary */}
-                      <td className="py-3.5 px-3">
-                        {guest.dietary && guest.dietary.toLowerCase() !== 'none' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-rose-50 text-rose-800 border border-rose-200/60">
-                            <UtensilsCrossed className="w-3 h-3 text-rose-500" />
-                            {guest.dietary}
+                {filteredGuests.map((guest) => (
+                  <tr key={guest.id} className="hover:bg-stone-50/60 transition group">
+                    <th scope="row" className="py-3.5 px-4 sm:px-6 font-normal">
+                      <div className="font-semibold text-stone-900 text-sm">{guest.name}</div>
+                      <div className="flex items-center gap-2 text-[11px] text-stone-600 mt-0.5">
+                        {guest.email && (
+                          <span className="flex items-center gap-1 truncate max-w-[150px]">
+                            <Mail className="w-3 h-3 text-stone-500" aria-hidden="true" />
+                            <span className="sr-only">Email:</span>
+                            {guest.email}
                           </span>
-                        ) : (
-                          <span className="text-stone-400 text-xs">Standard</span>
                         )}
-                      </td>
+                        {guest.phone && (
+                          <span className="flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-stone-500" aria-hidden="true" />
+                            <span className="sr-only">Phone:</span>
+                            {guest.phone}
+                          </span>
+                        )}
+                      </div>
+                    </th>
 
-                      {/* Table / Group */}
-                      <td className="py-3.5 px-3">
-                        <div className="font-medium text-stone-800">
-                          {guest.tableNumber || 'Unassigned'}
-                        </div>
-                        <div className="text-[10px] uppercase font-semibold text-stone-400 capitalize">
-                          {guest.group}
-                        </div>
-                      </td>
+                    {/* RSVP toggle group: state exposed via aria-pressed + visible text */}
+                    <td className="py-3.5 px-3">
+                      <div
+                        role="group"
+                        aria-label={`RSVP for ${guest.name}`}
+                        className="inline-flex rounded-xl p-0.5 bg-stone-100 border border-stone-200"
+                      >
+                        {RSVP_CHOICES.map((choice) => {
+                          const active = guest.rsvp === choice.value;
+                          return (
+                            <button
+                              key={choice.value}
+                              type="button"
+                              aria-pressed={active}
+                              onClick={(e) => handleQuickRsvpChange(guest, choice.value, e)}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition ${
+                                active ? choice.activeClass : `text-stone-700 ${choice.hoverClass}`
+                              }`}
+                            >
+                              {active && <span aria-hidden="true">✓ </span>}
+                              {choice.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </td>
 
-                      {/* Notes */}
-                      <td className="py-3.5 px-3">
-                        <span className="text-stone-600 truncate max-w-xs block">
-                          {guest.notes || '—'}
+                    <td className="py-3.5 px-3 text-center">
+                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-stone-100 font-bold text-stone-800">
+                        {guest.plusOnes > 0 ? `+${guest.plusOnes}` : '0'}
+                      </span>
+                    </td>
+
+                    <td className="py-3.5 px-3">
+                      {guest.dietary && guest.dietary.toLowerCase() !== 'none' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-rose-50 text-rose-900 border border-rose-200/60">
+                          <UtensilsCrossed className="w-3 h-3 text-rose-600" aria-hidden="true" />
+                          {guest.dietary}
                         </span>
-                      </td>
+                      ) : (
+                        <span className="text-stone-600 text-xs">Standard</span>
+                      )}
+                    </td>
 
-                      {/* Actions */}
-                      <td className="py-3.5 px-4 sm:px-6 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => {
-                              setEditingGuest(guest);
-                              setIsModalOpen(true);
-                            }}
-                            className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition"
-                            title="Edit Guest"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteGuest(guest.id)}
-                            className="p-1.5 rounded-lg text-stone-400 hover:text-red-600 hover:bg-red-50 transition"
-                            title="Delete Guest"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                    <td className="py-3.5 px-3">
+                      <div className="font-medium text-stone-800">{guest.tableNumber || 'Unassigned'}</div>
+                      <div className="text-[10px] uppercase font-semibold text-stone-600">{guest.group}</div>
+                    </td>
+
+                    <td className="py-3.5 px-3">
+                      <span className="text-stone-700 truncate max-w-xs block">{guest.notes || '—'}</span>
+                    </td>
+
+                    <td className="py-3.5 px-4 sm:px-6 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <IconButton
+                          label={`Edit ${guest.name}`}
+                          icon={Edit2}
+                          onClick={() => {
+                            setEditingGuest(guest);
+                            setIsModalOpen(true);
+                          }}
+                        />
+                        <IconButton
+                          label={`Delete ${guest.name}`}
+                          icon={Trash2}
+                          tone="danger"
+                          onClick={() => handleDeleteGuest(guest)}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
