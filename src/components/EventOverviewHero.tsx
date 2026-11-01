@@ -96,7 +96,7 @@ export const EventOverviewHero = memo(function EventOverviewHero({
   }, [event]);
 
   return (
-    <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-white via-[#FCF8F5] to-[#FBF2EC] border border-[#EFE3D5] shadow-sm p-6 sm:p-8 mb-8">
+    <div data-print-hide className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-white via-[#FCF8F5] to-[#FBF2EC] border border-[#EFE3D5] shadow-sm p-6 sm:p-8 mb-8">
       {/* Decorative subtle festive background elements */}
       <div className="absolute top-0 right-0 -mt-10 -mr-10 w-64 h-64 bg-gradient-to-br from-rose-200/40 via-amber-200/30 to-pink-200/20 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-0 left-1/3 -mb-10 w-56 h-56 bg-gradient-to-tr from-peach-200/30 via-orange-100/20 to-transparent rounded-full blur-2xl pointer-events-none" />

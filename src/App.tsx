@@ -168,7 +168,7 @@ export default function App() {
         </div>
       </main>
 
-      <footer className="border-t border-[#EFE8DD] bg-[#F7F3EC] py-8 text-center text-xs text-stone-500 mt-12">
+      <footer data-print-hide className="border-t border-[#EFE8DD] bg-[#F7F3EC] py-8 text-center text-xs text-stone-500 mt-12">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <span className="font-serif-title font-bold text-stone-900 text-sm">Fête</span>
