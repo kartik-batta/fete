@@ -91,12 +91,22 @@ export interface Vendor {
   notes: string;
 }
 
+/** Phase of the celebration a run-of-show milestone belongs to. */
+export type TimelineCategory =
+  | 'prep'
+  | 'arrival'
+  | 'activity'
+  | 'food'
+  | 'toast'
+  | 'party'
+  | 'wind_down';
+
 export interface TimelineEvent {
   id: string;
   time: string;
   title: string;
   description: string;
-  category: 'prep' | 'arrival' | 'activity' | 'food' | 'toast' | 'party' | 'wind_down';
+  category: TimelineCategory;
   assignedTo: string;
   tips?: string;
   completed?: boolean;
@@ -115,9 +125,18 @@ export interface InvitationDraft {
   };
   closing: string;
   signoff: string;
-  tone: 'warm' | 'playful' | 'elegant' | 'minimalist';
-  cardStyle: 'floral' | 'champagne' | 'midnight' | 'minimalist';
+  tone: InvitationTone;
+  cardStyle: InvitationCardStyle;
 }
+
+/** Voice used when wording invitations and thank-you notes. */
+export type InvitationTone = 'warm' | 'playful' | 'elegant' | 'minimalist';
+
+/** Visual stationery style of an invitation card. */
+export type InvitationCardStyle = 'floral' | 'champagne' | 'midnight' | 'minimalist';
+
+/** Kind of stationery message the AI should write. */
+export type InvitationMessageType = 'invitation' | 'thank_you';
 
 export interface AITheme {
   id: string;
@@ -153,17 +172,125 @@ export interface EventData {
   vendors: Vendor[];
   timeline: TimelineEvent[];
   invitationDraft?: InvitationDraft;
-  menuIdeas?: {
-    starters: string[];
-    mains: string[];
-    desserts: string[];
-    signatureDrinks: string[];
-  };
-  activityIdeas?: {
-    title: string;
-    duration: string;
-    description: string;
-    materialsNeeded?: string;
-  }[];
+  menuIdeas?: MenuIdeas;
+  activityIdeas?: ActivityIdea[];
+  /** Extra styling cues saved when an AI theme is applied. */
+  themeDetails?: ThemeDetails;
   notes: string;
+}
+
+/** Non-visual parts of an applied AI theme (playlist, attire, signature touch). */
+export interface ThemeDetails {
+  musicVibe?: string;
+  attire?: string;
+  signatureTouch?: string;
+}
+
+/** A curated celebration menu, grouped by course. */
+export interface MenuIdeas {
+  starters: string[];
+  mains: string[];
+  desserts: string[];
+  signatureDrinks: string[];
+}
+
+/** A party game or guest-engagement moment. */
+export interface ActivityIdea {
+  title: string;
+  duration: string;
+  description: string;
+  materialsNeeded?: string;
+}
+
+/** A décor accent suggested by the AI stylist. */
+export interface DecorIdea {
+  item: string;
+  description: string;
+  estimatedCost?: string;
+  priority?: string;
+}
+
+/** Combined décor, menu and activity recommendations. */
+export interface CuratedIdeas {
+  decor: DecorIdea[];
+  menu: MenuIdeas;
+  activities: ActivityIdea[];
+}
+
+/* -------------------------------------------------------------------------- */
+/* AI Studio request / response contracts (mirrors /api/gemini/* endpoints)    */
+/* -------------------------------------------------------------------------- */
+
+/** The AI tools available in the AI Studio tab. */
+export type AiStudioTool = 'themes' | 'invitations' | 'timeline' | 'ideas';
+
+/** POST /api/gemini/themes request body. */
+export interface ThemesRequest {
+  occasion: OccasionType;
+  guestCount: number;
+  budget: number;
+  vibe: string;
+  notes: string;
+}
+
+/** POST /api/gemini/invitation request body. */
+export interface InvitationRequest {
+  eventTitle: string;
+  occasion: OccasionType;
+  hostName: string;
+  date: string;
+  time: string;
+  location: string;
+  theme: string;
+  tone: InvitationTone;
+  extraDetails: string;
+  type: InvitationMessageType;
+}
+
+/** POST /api/gemini/timeline request body. */
+export interface TimelineRequest {
+  eventTitle: string;
+  occasion: OccasionType;
+  startTime: string;
+  endTime: string;
+  guestCount: number;
+  vibes: string;
+  keyMoments: string;
+}
+
+/** POST /api/gemini/ideas request body. */
+export interface IdeasRequest {
+  occasion: OccasionType;
+  guestCount: number;
+  budget: number;
+  theme: string;
+  dietary: string;
+  ageGroup: string;
+}
+
+/** Invitation wording as returned by the server (styling is applied client-side). */
+export type GeneratedInvitation = Omit<InvitationDraft, 'tone' | 'cardStyle'>;
+
+/** POST /api/gemini/themes response body. */
+export interface ThemesResponse {
+  success: boolean;
+  themes: AITheme[];
+}
+
+/** POST /api/gemini/invitation response body. */
+export interface InvitationResponse {
+  success: boolean;
+  invitation: GeneratedInvitation;
+}
+
+/** POST /api/gemini/timeline response body. */
+export interface TimelineResponse {
+  success: boolean;
+  timeline: TimelineEvent[];
+}
+
+/** POST /api/gemini/ideas response body. */
+export interface IdeasResponse {
+  success: boolean;
+  ideas: CuratedIdeas;
 }

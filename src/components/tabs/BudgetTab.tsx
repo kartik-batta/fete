@@ -1,76 +1,102 @@
-import React, { useState } from 'react';
+import React, { memo, useCallback, useMemo, useState } from 'react';
 import { EventData, Expense, ExpenseCategory } from '../../types';
-import {
-  DollarSign,
-  Plus,
-  TrendingUp,
-  PieChart,
-  CheckCircle2,
-  Clock,
-  Edit2,
-  Trash2,
-  AlertCircle,
-} from 'lucide-react';
+import { AlertCircle, DollarSign, Plus, TrendingUp, CheckCircle2, Edit2, Trash2 } from 'lucide-react';
 import { ExpenseModal } from '../modals/ExpenseModal';
 import { triggerMiniConfetti } from '../../utils/confetti';
+import {
+  EXPENSE_CATEGORIES,
+  EXPENSE_CATEGORY_LABELS,
+  clampPercent,
+  getBudgetStats,
+  getCategoryTotals,
+  getOverAllocatedCategories,
+  type BudgetPosition,
+} from '../../utils/eventStats';
 
 interface BudgetTabProps {
   event: EventData;
   onUpdateEvent: (updated: EventData) => void;
 }
 
-export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) => {
+type CategoryFilter = ExpenseCategory | 'all';
+
+const GAUGE_COLORS = {
+  healthy: 'bg-emerald-500',
+  warning: 'bg-amber-500',
+  over: 'bg-rose-500',
+} as const;
+
+const POSITION_CARD: Record<
+  BudgetPosition,
+  { label: string; hint: string; card: string; icon: string; value: string }
+> = {
+  under: {
+    label: 'Remaining Funds',
+    hint: 'Available for extras',
+    card: 'bg-white border-[#EFE5D8]',
+    icon: 'text-emerald-500',
+    value: 'text-stone-900',
+  },
+  on: {
+    label: 'On Budget',
+    hint: 'Every dollar is allocated',
+    card: 'bg-amber-50/60 border-amber-200',
+    icon: 'text-amber-500',
+    value: 'text-stone-900',
+  },
+  over: {
+    label: 'Over Budget',
+    hint: 'Trim expenses or raise the limit',
+    card: 'bg-rose-50/80 border-rose-200',
+    icon: 'text-rose-500',
+    value: 'text-rose-700',
+  },
+};
+
+const STATUS_BADGES: Record<Expense['status'], { label: string; className: string }> = {
+  paid_in_full: { label: '✅ Paid in Full', className: 'bg-emerald-100 text-emerald-800' },
+  deposit_paid: { label: '⏳ Deposit Paid', className: 'bg-amber-100 text-amber-800' },
+  planned: { label: '📝 Planned', className: 'bg-stone-100 text-stone-700' },
+};
+
+export const BudgetTab = memo(function BudgetTab({ event, onUpdateEvent }: BudgetTabProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedCategory, setSelectedCategory] = useState<CategoryFilter>('all');
   const [editingBudgetLimit, setEditingBudgetLimit] = useState(false);
   const [newBudgetLimit, setNewBudgetLimit] = useState(event.totalBudget.toString());
 
-  // Metrics
-  const totalBudget = event.totalBudget;
-  const totalBudgeted = event.expenses.reduce((acc, exp) => acc + (exp.budgeted || 0), 0);
-  const totalActual = event.expenses.reduce((acc, exp) => acc + (exp.actual || 0), 0);
-  const totalCommitted = event.expenses.reduce(
-    (acc, exp) => acc + (exp.actual > 0 ? exp.actual : exp.budgeted),
-    0
+  const {
+    totalBudget,
+    totalBudgeted,
+    totalCommitted,
+    totalPaid,
+    outstanding,
+    remaining,
+    overBy,
+    position,
+    percentCommitted,
+    health,
+  } = useMemo(
+    () => getBudgetStats(event.expenses, event.totalBudget),
+    [event.expenses, event.totalBudget]
   );
-  const remaining = Math.max(0, totalBudget - totalCommitted);
-  const percentageSpent = totalBudget > 0 ? Math.round((totalCommitted / totalBudget) * 100) : 0;
+  const categoryTotals = useMemo(() => getCategoryTotals(event.expenses), [event.expenses]);
+  const overAllocated = useMemo(() => getOverAllocatedCategories(categoryTotals), [categoryTotals]);
 
-  // Categories list
-  const categoryNames: Record<ExpenseCategory, string> = {
-    venue: 'Venue & Location',
-    catering: 'Catering & Drinks',
-    decor: 'Décor & Florals',
-    entertainment: 'Music & Entertainment',
-    photo: 'Photography & Video',
-    favors: 'Favors & Stationery',
-    apparel: 'Attire & Styling',
-    other: 'Miscellaneous',
-  };
+  const filteredExpenses = useMemo(
+    () =>
+      selectedCategory === 'all'
+        ? event.expenses
+        : event.expenses.filter((exp) => exp.category === selectedCategory),
+    [event.expenses, selectedCategory]
+  );
+  const vendorNames = useMemo(() => event.vendors.map((v) => v.name), [event.vendors]);
 
-  const categoryTotals: Record<ExpenseCategory, { budgeted: number; actual: number }> = {
-    venue: { budgeted: 0, actual: 0 },
-    catering: { budgeted: 0, actual: 0 },
-    decor: { budgeted: 0, actual: 0 },
-    entertainment: { budgeted: 0, actual: 0 },
-    photo: { budgeted: 0, actual: 0 },
-    favors: { budgeted: 0, actual: 0 },
-    apparel: { budgeted: 0, actual: 0 },
-    other: { budgeted: 0, actual: 0 },
-  };
-
-  event.expenses.forEach((exp) => {
-    if (categoryTotals[exp.category]) {
-      categoryTotals[exp.category].budgeted += exp.budgeted || 0;
-      categoryTotals[exp.category].actual += exp.actual || 0;
-    }
-  });
-
-  const filteredExpenses =
-    selectedCategory === 'all'
-      ? event.expenses
-      : event.expenses.filter((exp) => exp.category === selectedCategory);
+  const closeModal = useCallback(() => {
+    setIsModalOpen(false);
+    setEditingExpense(null);
+  }, []);
 
   const handleSaveExpense = (expense: Expense) => {
     let updated: Expense[];
@@ -92,12 +118,11 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
   };
 
   const handleSaveBudgetLimit = () => {
-    const val = parseFloat(newBudgetLimit) || 0;
+    const parsed = parseFloat(newBudgetLimit);
+    const val = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
     onUpdateEvent({ ...event, totalBudget: val });
     setEditingBudgetLimit(false);
   };
-
-  const vendorNames = event.vendors.map((v) => v.name);
 
   return (
     <div className="space-y-6">
@@ -122,6 +147,8 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
             <div className="flex items-center gap-2 mt-2">
               <input
                 type="number"
+                min={0}
+                aria-label="Total event budget"
                 value={newBudgetLimit}
                 onChange={(e) => setNewBudgetLimit(e.target.value)}
                 className="w-28 px-2 py-1 text-sm rounded-lg border border-stone-300 font-bold"
@@ -143,58 +170,46 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
           </p>
         </div>
 
-        {/* Committed / Spent */}
+        {/* Committed (actual cost once known, else estimate) */}
         <div className="p-5 rounded-3xl bg-amber-50/50 border border-amber-100 shadow-xs">
           <div className="flex items-center justify-between text-amber-800 mb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider">Total Allocated</span>
-            <TrendingUp className="w-4 h-4 text-amber-600" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Committed</span>
+            <TrendingUp className="w-4 h-4 text-amber-600" aria-hidden="true" />
           </div>
           <div className="text-2xl sm:text-3xl font-bold text-amber-900">
             ${totalCommitted.toLocaleString()}
           </div>
           <p className="text-[11px] text-amber-700 mt-1">
-            {percentageSpent}% of total budget
+            {percentCommitted}% of budget · estimated ${totalBudgeted.toLocaleString()}
           </p>
         </div>
 
-        {/* Paid So Far */}
+        {/* Paid so far — deposits & full settlements only */}
         <div className="p-5 rounded-3xl bg-emerald-50/50 border border-emerald-100 shadow-xs">
           <div className="flex items-center justify-between text-emerald-800 mb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider">Actual Paid</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Paid So Far</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" aria-hidden="true" />
           </div>
           <div className="text-2xl sm:text-3xl font-bold text-emerald-900">
-            ${totalActual.toLocaleString()}
+            ${totalPaid.toLocaleString()}
           </div>
           <p className="text-[11px] text-emerald-700 mt-1">
-            Paid deposits & full settlements
+            ${outstanding.toLocaleString()} outstanding balance
           </p>
         </div>
 
-        {/* Remaining */}
-        <div
-          className={`p-5 rounded-3xl border shadow-xs ${
-            remaining > 0
-              ? 'bg-white border-[#EFE5D8]'
-              : 'bg-rose-50/80 border-rose-200'
-          }`}
-        >
+        {/* Remaining / over budget */}
+        <div className={`p-5 rounded-3xl border shadow-xs ${POSITION_CARD[position].card}`}>
           <div className="flex items-center justify-between text-stone-500 mb-1">
             <span className="text-[11px] font-semibold uppercase tracking-wider">
-              {remaining > 0 ? 'Remaining Funds' : 'Over Budget'}
+              {POSITION_CARD[position].label}
             </span>
-            <DollarSign className={`w-4 h-4 ${remaining > 0 ? 'text-emerald-500' : 'text-rose-500'}`} />
+            <DollarSign className={`w-4 h-4 ${POSITION_CARD[position].icon}`} aria-hidden="true" />
           </div>
-          <div
-            className={`text-2xl sm:text-3xl font-bold ${
-              remaining > 0 ? 'text-stone-900' : 'text-rose-700'
-            }`}
-          >
-            ${remaining.toLocaleString()}
+          <div className={`text-2xl sm:text-3xl font-bold ${POSITION_CARD[position].value}`}>
+            {position === 'over' ? `Over by $${overBy.toLocaleString()}` : `$${remaining.toLocaleString()}`}
           </div>
-          <p className="text-[11px] text-stone-500 mt-1">
-            {remaining > 0 ? 'Available for extras' : 'Adjust expense allocations'}
-          </p>
+          <p className="text-[11px] text-stone-500 mt-1">{POSITION_CARD[position].hint}</p>
         </div>
       </div>
 
@@ -203,28 +218,43 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
         <div className="flex items-center justify-between text-xs font-semibold text-stone-700 mb-2">
           <span>Budget Utilization Gauge</span>
           <span>
-            ${totalCommitted.toLocaleString()} of ${totalBudget.toLocaleString()} ({percentageSpent}%)
+            ${totalCommitted.toLocaleString()} of ${totalBudget.toLocaleString()} ({percentCommitted}%)
           </span>
         </div>
         <div className="w-full bg-stone-100 h-3 rounded-full overflow-hidden flex">
           <div
-            className={`h-full transition-all duration-500 ${
-              percentageSpent > 100
-                ? 'bg-rose-500'
-                : percentageSpent > 85
-                ? 'bg-amber-500'
-                : 'bg-emerald-500'
-            }`}
-            style={{ width: `${Math.min(percentageSpent, 100)}%` }}
+            className={`h-full transition-all duration-500 ${GAUGE_COLORS[health]}`}
+            style={{ width: `${clampPercent(percentCommitted)}%` }}
           />
         </div>
       </div>
 
+      {overAllocated.length > 0 && (
+        <div
+          role="status"
+          className="flex items-start gap-2 bg-rose-50/80 p-4 rounded-3xl border border-rose-200 text-xs text-rose-900"
+        >
+          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-rose-600" aria-hidden="true" />
+          <div>
+            <span className="font-semibold block mb-1">Categories running over their estimates</span>
+            <ul className="flex flex-wrap gap-x-4 gap-y-1">
+              {overAllocated.map(({ category, overBy: catOver }) => (
+                <li key={category}>
+                  {EXPENSE_CATEGORY_LABELS[category]}: <strong>+${catOver.toLocaleString()}</strong>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* Category Pills & Add Button */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-4 rounded-3xl border border-[#EFE5D8] shadow-xs">
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
+        {/* Pills wrap instead of scrolling so no category label is clipped off-screen. */}
+        <div className="flex flex-wrap items-center gap-1.5 py-1 min-w-0 flex-1">
           <button
             onClick={() => setSelectedCategory('all')}
+            aria-pressed={selectedCategory === 'all'}
             className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
               selectedCategory === 'all'
                 ? 'bg-stone-900 text-white'
@@ -233,12 +263,13 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
           >
             All Categories ({event.expenses.length})
           </button>
-          {Object.entries(categoryNames).map(([catKey, label]) => {
-            const hasItems = event.expenses.some((e) => e.category === catKey);
+          {EXPENSE_CATEGORIES.map((catKey) => {
+            const hasItems = categoryTotals[catKey].count > 0;
             return (
               <button
                 key={catKey}
                 onClick={() => setSelectedCategory(catKey)}
+                aria-pressed={selectedCategory === catKey}
                 className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
                   selectedCategory === catKey
                     ? 'bg-rose-500 text-white'
@@ -247,7 +278,7 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
                     : 'bg-stone-50 text-stone-400 hover:bg-stone-100'
                 }`}
               >
-                {label}
+                {EXPENSE_CATEGORY_LABELS[catKey]}
               </button>
             );
           })}
@@ -310,7 +341,7 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
 
                       <td className="py-3.5 px-3">
                         <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-stone-100 text-stone-700 capitalize">
-                          {categoryNames[expense.category] || expense.category}
+                          {EXPENSE_CATEGORY_LABELS[expense.category] ?? expense.category}
                         </span>
                       </td>
 
@@ -343,18 +374,10 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
                       <td className="py-3.5 px-3">
                         <span
                           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                            expense.status === 'paid_in_full'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : expense.status === 'deposit_paid'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-stone-100 text-stone-700'
+                            (STATUS_BADGES[expense.status] ?? STATUS_BADGES.planned).className
                           }`}
                         >
-                          {expense.status === 'paid_in_full'
-                            ? '✅ Paid in Full'
-                            : expense.status === 'deposit_paid'
-                            ? '⏳ Deposit Paid'
-                            : '📝 Planned'}
+                          {(STATUS_BADGES[expense.status] ?? STATUS_BADGES.planned).label}
                         </span>
                       </td>
 
@@ -371,6 +394,7 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
                             }}
                             className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition"
                             title="Edit Expense"
+                            aria-label={`Edit ${expense.name}`}
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
@@ -378,6 +402,7 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
                             onClick={() => handleDeleteExpense(expense.id)}
                             className="p-1.5 rounded-lg text-stone-400 hover:text-red-600 hover:bg-red-50 transition"
                             title="Delete Expense"
+                            aria-label={`Delete ${expense.name}`}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -394,14 +419,11 @@ export const BudgetTab: React.FC<BudgetTabProps> = ({ event, onUpdateEvent }) =>
 
       <ExpenseModal
         isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingExpense(null);
-        }}
+        onClose={closeModal}
         onSave={handleSaveExpense}
         initialExpense={editingExpense}
         vendorNames={vendorNames}
       />
     </div>
   );
-};
+});

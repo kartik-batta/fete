@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { Guest } from '../../types';
-import { X, Check } from 'lucide-react';
+import { Modal, ModalActions } from '../ui/Modal';
+import { ChoiceGroup, ChoiceOption, RequiredFieldsNote, SelectField, SelectOption, TextField } from '../ui/FormField';
+import { FieldErrors, LIMITS, isValidEmail, isValidPhone, sanitizeText } from '../ui/form';
+import { useFormErrors } from '../ui/useFormErrors';
 
 interface GuestModalProps {
   isOpen: boolean;
@@ -9,237 +12,172 @@ interface GuestModalProps {
   initialGuest?: Guest | null;
 }
 
-export const GuestModal: React.FC<GuestModalProps> = ({
-  isOpen,
-  onClose,
-  onSave,
-  initialGuest,
-}) => {
-  if (!isOpen) return null;
+const MAX_PLUS_ONES = 10;
 
-  const [name, setName] = useState(initialGuest?.name || '');
-  const [email, setEmail] = useState(initialGuest?.email || '');
-  const [phone, setPhone] = useState(initialGuest?.phone || '');
-  const [rsvp, setRsvp] = useState<'attending' | 'declined' | 'pending'>(initialGuest?.rsvp || 'pending');
-  const [plusOnes, setPlusOnes] = useState<number>(initialGuest?.plusOnes ?? 0);
-  const [dietary, setDietary] = useState(initialGuest?.dietary || 'None');
-  const [group, setGroup] = useState<'family' | 'friends' | 'colleagues' | 'vip' | 'other'>(initialGuest?.group || 'friends');
-  const [tableNumber, setTableNumber] = useState(initialGuest?.tableNumber || '');
-  const [notes, setNotes] = useState(initialGuest?.notes || '');
+const RSVP_OPTIONS: ChoiceOption<Guest['rsvp']>[] = [
+  { value: 'attending', label: '✨ Attending', selectedClassName: 'bg-emerald-50 text-emerald-900 border-emerald-500 ring-2 ring-emerald-400' },
+  { value: 'pending', label: '⏳ Pending', selectedClassName: 'bg-amber-50 text-amber-900 border-amber-500 ring-2 ring-amber-400' },
+  { value: 'declined', label: '💌 Declined', selectedClassName: 'bg-stone-100 text-stone-900 border-stone-500 ring-2 ring-stone-400' },
+];
+
+const GROUP_OPTIONS: SelectOption<Guest['group']>[] = [
+  { value: 'friends', label: 'Friends' },
+  { value: 'family', label: 'Family' },
+  { value: 'colleagues', label: 'Colleagues' },
+  { value: 'vip', label: 'VIP' },
+  { value: 'other', label: 'Other' },
+];
+
+type GuestField = 'name' | 'email' | 'phone' | 'plusOnes';
+
+export const GuestModal: React.FC<GuestModalProps> = ({ isOpen, onClose, onSave, initialGuest }) => (
+  <Modal
+    isOpen={isOpen}
+    onClose={onClose}
+    title={initialGuest ? 'Edit Guest' : 'Add Guest to Celebration'}
+    description="Keep track of invitations, RSVP confirmations, plus-ones, and dietary restrictions."
+  >
+    <GuestForm initialGuest={initialGuest} onSave={onSave} onClose={onClose} />
+  </Modal>
+);
+
+const GuestForm: React.FC<Omit<GuestModalProps, 'isOpen'>> = ({ initialGuest, onSave, onClose }) => {
+  const [name, setName] = useState(initialGuest?.name ?? '');
+  const [email, setEmail] = useState(initialGuest?.email ?? '');
+  const [phone, setPhone] = useState(initialGuest?.phone ?? '');
+  const [rsvp, setRsvp] = useState<Guest['rsvp']>(initialGuest?.rsvp ?? 'pending');
+  const [plusOnes, setPlusOnes] = useState(String(initialGuest?.plusOnes ?? 0));
+  const [dietary, setDietary] = useState(initialGuest?.dietary ?? 'None');
+  const [group, setGroup] = useState<Guest['group']>(initialGuest?.group ?? 'friends');
+  const [tableNumber, setTableNumber] = useState(initialGuest?.tableNumber ?? '');
+  const [notes, setNotes] = useState(initialGuest?.notes ?? '');
+  const { errors, check, clearError, formRef } = useFormErrors<GuestField>();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    const clean = {
+      name: sanitizeText(name, LIMITS.name),
+      email: sanitizeText(email, LIMITS.email),
+      phone: sanitizeText(phone, LIMITS.phone),
+    };
+    const plusOnesNum = Number(plusOnes);
+
+    const next: FieldErrors<GuestField> = {};
+    if (!clean.name) next.name = 'Please enter the guest’s name.';
+    if (clean.email && !isValidEmail(clean.email)) next.email = 'Enter a valid email, e.g. name@example.com.';
+    if (clean.phone && !isValidPhone(clean.phone)) next.phone = 'Use digits, spaces, +, -, ( or ) only.';
+    if (!Number.isInteger(plusOnesNum) || plusOnesNum < 0 || plusOnesNum > MAX_PLUS_ONES) {
+      next.plusOnes = `Enter a whole number from 0 to ${MAX_PLUS_ONES}.`;
+    }
+    if (!check(next)) return;
 
     onSave({
-      id: initialGuest?.id || `g-${Date.now()}`,
-      name: name.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
+      id: initialGuest?.id ?? `g-${Date.now()}`,
+      ...clean,
       rsvp,
-      plusOnes: Math.max(0, plusOnes),
-      dietary: dietary.trim() || 'None',
+      plusOnes: plusOnesNum,
+      dietary: sanitizeText(dietary, LIMITS.short) || 'None',
       group,
-      tableNumber: tableNumber.trim(),
-      notes: notes.trim(),
+      tableNumber: sanitizeText(tableNumber, LIMITS.short),
+      notes: sanitizeText(notes, LIMITS.notes),
     });
     onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-stone-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-stone-200 relative animate-in fade-in zoom-in-95 duration-150">
-        <button
-          onClick={onClose}
-          className="absolute top-5 right-5 p-2 rounded-full hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition"
-        >
-          <X className="w-5 h-5" />
-        </button>
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-4">
+      <RequiredFieldsNote />
+      <TextField
+        label="Guest Name"
+        required
+        autoComplete="off"
+        maxLength={LIMITS.name}
+        placeholder="e.g. Elena Rostova"
+        value={name}
+        error={errors.name}
+        onChange={(e) => {
+          setName(e.target.value);
+          clearError('name');
+        }}
+      />
 
-        <h2 className="font-serif-title text-2xl font-bold text-stone-900 mb-1">
-          {initialGuest ? 'Edit Guest' : 'Add Guest to Celebration'}
-        </h2>
-        <p className="text-xs text-stone-500 mb-5">
-          Keep track of invitations, RSVP confirmations, plus-ones, and dietary restrictions.
-        </p>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-              Guest Name *
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. Elena Rostova"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm font-medium"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Email Address
-              </label>
-              <input
-                type="email"
-                placeholder="elena@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Phone Number
-              </label>
-              <input
-                type="tel"
-                placeholder="(555) 000-0000"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-              />
-            </div>
-          </div>
-
-          {/* RSVP Status */}
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1.5">
-              RSVP Status
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setRsvp('attending')}
-                className={`py-2 px-3 rounded-xl text-xs font-semibold border transition ${
-                  rsvp === 'attending'
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300 ring-2 ring-emerald-300'
-                    : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
-                }`}
-              >
-                ✨ Attending
-              </button>
-              <button
-                type="button"
-                onClick={() => setRsvp('pending')}
-                className={`py-2 px-3 rounded-xl text-xs font-semibold border transition ${
-                  rsvp === 'pending'
-                    ? 'bg-amber-50 text-amber-800 border-amber-300 ring-2 ring-amber-300'
-                    : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
-                }`}
-              >
-                ⏳ Pending
-              </button>
-              <button
-                type="button"
-                onClick={() => setRsvp('declined')}
-                className={`py-2 px-3 rounded-xl text-xs font-semibold border transition ${
-                  rsvp === 'declined'
-                    ? 'bg-stone-100 text-stone-800 border-stone-300 ring-2 ring-stone-300'
-                    : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
-                }`}
-              >
-                💌 Declined
-              </button>
-            </div>
-          </div>
-
-          {/* Plus-Ones & Group */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Plus Ones (+ Guests)
-              </label>
-              <input
-                type="number"
-                min="0"
-                max="10"
-                value={plusOnes}
-                onChange={(e) => setPlusOnes(parseInt(e.target.value) || 0)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm font-semibold"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Guest Group
-              </label>
-              <select
-                value={group}
-                onChange={(e) => setGroup(e.target.value as any)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm capitalize"
-              >
-                <option value="friends">Friends</option>
-                <option value="family">Family</option>
-                <option value="colleagues">Colleagues</option>
-                <option value="vip">VIP</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Dietary Restrictions & Table */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Dietary Restrictions / Allergies
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Vegetarian, Gluten-Free, Nut allergy"
-                value={dietary}
-                onChange={(e) => setDietary(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-                Table / Seating Group
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Table 1 - Magnolia"
-                value={tableNumber}
-                onChange={(e) => setTableNumber(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-              />
-            </div>
-          </div>
-
-          {/* Notes */}
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-600 mb-1">
-              Personal Notes
-            </label>
-            <input
-              type="text"
-              placeholder="e.g. Bringing a camera, needs high chair, etc."
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className="w-full px-3.5 py-2 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-300 text-stone-900 text-sm"
-            />
-          </div>
-
-          <div className="pt-3 border-t border-stone-100 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-stone-600 hover:text-stone-900 font-medium text-xs transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-semibold text-xs shadow-md transition flex items-center gap-1.5"
-            >
-              <Check className="w-4 h-4" />
-              <span>{initialGuest ? 'Save Changes' : 'Add Guest'}</span>
-            </button>
-          </div>
-        </form>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <TextField
+          label="Email Address"
+          type="email"
+          inputMode="email"
+          autoComplete="off"
+          maxLength={LIMITS.email}
+          placeholder="elena@example.com"
+          value={email}
+          error={errors.email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            clearError('email');
+          }}
+        />
+        <TextField
+          label="Phone Number"
+          type="tel"
+          inputMode="tel"
+          autoComplete="off"
+          maxLength={LIMITS.phone}
+          placeholder="(555) 000-0000"
+          value={phone}
+          error={errors.phone}
+          onChange={(e) => {
+            setPhone(e.target.value);
+            clearError('phone');
+          }}
+        />
       </div>
-    </div>
+
+      <ChoiceGroup legend="RSVP Status" value={rsvp} onChange={setRsvp} options={RSVP_OPTIONS} />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <TextField
+          label="Plus Ones (+ Guests)"
+          type="number"
+          inputMode="numeric"
+          min={0}
+          max={MAX_PLUS_ONES}
+          step={1}
+          value={plusOnes}
+          error={errors.plusOnes}
+          onChange={(e) => {
+            setPlusOnes(e.target.value);
+            clearError('plusOnes');
+          }}
+        />
+        <SelectField label="Guest Group" value={group} onValueChange={setGroup} options={GROUP_OPTIONS} />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <TextField
+          label="Dietary Restrictions / Allergies"
+          maxLength={LIMITS.short}
+          placeholder="e.g. Vegetarian, Nut allergy"
+          value={dietary}
+          onChange={(e) => setDietary(e.target.value)}
+        />
+        <TextField
+          label="Table / Seating Group"
+          maxLength={LIMITS.short}
+          placeholder="e.g. Table 1 - Magnolia"
+          value={tableNumber}
+          onChange={(e) => setTableNumber(e.target.value)}
+        />
+      </div>
+
+      <TextField
+        label="Personal Notes"
+        maxLength={LIMITS.notes}
+        placeholder="e.g. Bringing a camera, needs high chair, etc."
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+      />
+
+      <ModalActions onCancel={onClose} submitLabel={initialGuest ? 'Save Changes' : 'Add Guest'} />
+    </form>
   );
 };
